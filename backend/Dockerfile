@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Render/Railway inject $PORT at runtime; default to 8000 for local docker run
+# Render injects $PORT at runtime; default to 8000 for local docker run
 ENV PORT=8000
 EXPOSE 8000
 
