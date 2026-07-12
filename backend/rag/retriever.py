@@ -30,7 +30,7 @@ def _load_documents():
     for fname in sorted(os.listdir(DOCS_DIR)):
         if fname.endswith(".txt"):
             fpath = os.path.join(DOCS_DIR, fname)
-            with open(fpath) as f:
+            with open(fpath, encoding="utf-8") as f:
                 content = f.read().strip()
             if content:
                 _doc_names.append(fname.replace(".txt", "").replace("_", " ").title())

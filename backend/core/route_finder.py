@@ -45,7 +45,14 @@ def _load_graph():
     if _di_graph is not None:
         return _di_graph, _multi_graph
 
-    _multi_graph = ox.load_graphml(GRAPH_PATH)
+    if not os.path.exists(GRAPH_PATH):
+        print("Downloading Brooklyn road network from OSM (one-time)...")
+        _multi_graph = ox.graph_from_place("Brooklyn, New York City, New York, USA", network_type="drive")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        ox.save_graphml(_multi_graph, GRAPH_PATH)
+        print(f"Saved graph to {GRAPH_PATH}")
+    else:
+        _multi_graph = ox.load_graphml(GRAPH_PATH)
 
     # Convert MultiDiGraph → DiGraph: for each (u,v) keep the edge with minimum length
     _di_graph = nx.DiGraph()

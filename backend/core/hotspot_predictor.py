@@ -123,7 +123,14 @@ def predict_hotspots() -> list[dict]:
         return _cache["clusters"]
 
     # Load graph
-    G = ox.load_graphml(GRAPH_PATH)
+    if not os.path.exists(GRAPH_PATH):
+        print("Downloading Brooklyn road network from OSM (one-time)...")
+        G = ox.graph_from_place("Brooklyn, New York City, New York, USA", network_type="drive")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        ox.save_graphml(G, GRAPH_PATH)
+        print(f"Saved graph to {GRAPH_PATH}")
+    else:
+        G = ox.load_graphml(GRAPH_PATH)
 
     # Generate synthetic accidents
     accidents = _generate_synthetic_accidents(G, n=500)
