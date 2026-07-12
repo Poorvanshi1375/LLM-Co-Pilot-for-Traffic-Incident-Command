@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: trafficmind-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_API_KEYS
+        sync: false
+      - key: GOOGLE_AI_API_KEY
+        sync: false
+      - key: GOOGLE_AI_API_KEY_2
+        sync: false
+      - key: GOOGLE_AI_API_KEYS
+        sync: false
+      - key: MAPBOX_TOKEN
+        sync: false
+      - key: TWITTER_API_KEY
+        sync: false
+      - key: TWITTER_API_SECRET
+        sync: false
+      - key: TWITTER_ACCESS_TOKEN
+        sync: false
+      - key: TWITTER_ACCESS_SECRET
+        sync: false
+      - key: NYC_OPEN_DATA_TOKEN
+        sync: false
