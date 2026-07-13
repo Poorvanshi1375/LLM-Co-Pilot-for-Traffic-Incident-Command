@@ -5,6 +5,7 @@ Uses Groq (Llama 3.3 70B) for sub-second inference.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from groq import Groq
@@ -94,7 +95,8 @@ Return ONLY a valid JSON array."""
 
     try:
         client = Groq(api_key=get_groq_key())
-        response = client.chat.completions.create(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},

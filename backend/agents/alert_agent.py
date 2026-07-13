@@ -5,6 +5,7 @@ Uses Groq (Llama 3.3 70B).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from groq import Groq
@@ -55,7 +56,8 @@ Generate all three alert formats. Return ONLY valid JSON."""
 
     try:
         client = Groq(api_key=get_groq_key())
-        response = client.chat.completions.create(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},

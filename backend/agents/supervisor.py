@@ -4,6 +4,7 @@ Uses Gemini 2.0 Flash for deep cross-agent reasoning.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -141,7 +142,8 @@ async def run_supervisor(
         try:
             genai.configure(api_key=get_gemini_key())
             model = genai.GenerativeModel("gemini-2.5-flash")
-            response = model.generate_content(
+            response = await asyncio.to_thread(
+                model.generate_content,
                 f"{SYSTEM_PROMPT}\n\nAGENT OUTPUTS:\n{json.dumps(agent_data, indent=2)}\n\nReturn ONLY valid JSON.",
                 generation_config=genai.GenerationConfig(
                     temperature=0.3,

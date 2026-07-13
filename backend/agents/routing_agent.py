@@ -5,6 +5,7 @@ Uses Groq for narration of the route in officer-friendly language.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import random
@@ -163,7 +164,8 @@ Narrate this diversion for an officer. Return ONLY valid JSON."""
 
     try:
         client = Groq(api_key=get_groq_key())
-        response = client.chat.completions.create(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": NARRATION_PROMPT},

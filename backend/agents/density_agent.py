@@ -5,6 +5,7 @@ Vision mode: Gemini 2.0 Flash for camera frame analysis.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import base64
@@ -86,7 +87,7 @@ Return JSON:
         image_data = base64.b64decode(image_base64)
         image = PIL.Image.open(io.BytesIO(image_data))
 
-        response = model.generate_content([prompt, image])
+        response = await asyncio.to_thread(model.generate_content, [prompt, image])
         text = response.text
 
         # Try to parse JSON from response

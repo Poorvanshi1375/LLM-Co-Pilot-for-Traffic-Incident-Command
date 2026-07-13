@@ -5,6 +5,7 @@ Uses Gemini 2.0 Flash with multi-turn memory.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -213,7 +214,7 @@ class NarrativeAgent:
 
         if not GEMINI_AVAILABLE:
             # Fallback: direct tool-based response
-            return self._fallback_response(user_message)
+            return await self._fallback_response(user_message)
 
         # Try up to 3 different API keys on rate-limit errors
         last_error = None
@@ -239,7 +240,8 @@ CONVERSATION HISTORY:
 Respond to the officer's latest question naturally and conversationally. Use tools if needed by including [TOOL: tool_name("arg")] in your thinking.
 Synthesize any reference knowledge into your own words — never copy it verbatim. Then provide the final answer."""
 
-                response = model.generate_content(
+                response = await asyncio.to_thread(
+                    model.generate_content,
                     prompt,
                     generation_config=genai.GenerationConfig(
                         temperature=0.4,
@@ -275,7 +277,8 @@ Synthesize any reference knowledge into your own words — never copy it verbati
 
 Provide a clear, data-backed answer to the officer. No further tool calls needed. Do NOT include [TOOL_CALL:...] markers in your answer."""
 
-                        response2 = model.generate_content(
+                        response2 = await asyncio.to_thread(
+                            model.generate_content,
                             f"{prompt}\n\nTOOL OBSERVATIONS:\n{observations}\n\n{follow_up}",
                             generation_config=genai.GenerationConfig(
                                 temperature=0.3,
@@ -323,9 +326,9 @@ Provide a clear, data-backed answer to the officer. No further tool calls needed
 
         # All retries exhausted
         print(f"All Gemini attempts failed, using fallback")
-        return self._fallback_response(user_message)
+        return await self._fallback_response(user_message)
 
-    def _fallback_response(self, question: str) -> ChatResponse:
+    async def _fallback_response(self, question: str) -> ChatResponse:
         """Generate response using available data, with LLM layer if possible."""
         q = question.lower()
         tool_calls = []
@@ -392,7 +395,8 @@ Write a helpful, concise, conversational response. 2-4 sentences."""
                 try:
                     genai.configure(api_key=get_gemini_key())
                     model = genai.GenerativeModel("gemini-2.5-flash")
-                    resp = model.generate_content(
+                    resp = await asyncio.to_thread(
+                        model.generate_content,
                         fallback_prompt,
                         generation_config=genai.GenerationConfig(temperature=0.5, max_output_tokens=800),
                     )
