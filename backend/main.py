@@ -211,7 +211,7 @@ async def get_hotspots_endpoint():
 @app.get("/api/hotspots/predicted")
 async def get_predicted_hotspots():
     """Get DBSCAN-predicted accident hotspot clusters."""
-    clusters = predict_hotspot_clusters()
+    clusters = await asyncio.to_thread(predict_hotspot_clusters)
     return {"clusters": clusters}
 
 
@@ -376,7 +376,8 @@ async def compute_routes_endpoint(body: RouteRequest):
     except Exception:
         pass
 
-    routes = compute_routes(
+    routes = await asyncio.to_thread(
+        compute_routes,
         origin_lat=body.origin_lat,
         origin_lon=body.origin_lon,
         dest_lat=body.dest_lat,
@@ -532,11 +533,16 @@ async def chat_voice(audio: UploadFile = File(...)):
     # Generate gTTS audio from response text
     try:
         from gtts import gTTS
-        tts = gTTS(text=result["response"], lang="en")
-        buf = BytesIO()
-        tts.write_to_fp(buf)
-        buf.seek(0)
-        result["audio_base64"] = base64.b64encode(buf.read()).decode("ascii")
+
+        def _synthesize_speech(text: str) -> bytes:
+            tts = gTTS(text=text, lang="en")
+            buf = BytesIO()
+            tts.write_to_fp(buf)
+            buf.seek(0)
+            return buf.read()
+
+        audio_bytes_out = await asyncio.to_thread(_synthesize_speech, result["response"])
+        result["audio_base64"] = base64.b64encode(audio_bytes_out).decode("ascii")
     except Exception as e:
         print(f"gTTS error: {e}")
         result["audio_base64"] = ""

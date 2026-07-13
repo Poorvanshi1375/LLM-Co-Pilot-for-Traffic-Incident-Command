@@ -4,6 +4,7 @@ Uses the existing key rotation infrastructure.
 """
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import os
 from typing import Optional
@@ -28,7 +29,8 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> 
 
         try:
             with open(tmp_path, "rb") as audio_file:
-                transcription = client.audio.transcriptions.create(
+                transcription = await asyncio.to_thread(
+                    client.audio.transcriptions.create,
                     file=(filename, audio_file),
                     model="whisper-large-v3-turbo",
                     language="en",
