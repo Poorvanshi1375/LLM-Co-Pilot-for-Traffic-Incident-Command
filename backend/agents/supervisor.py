@@ -12,7 +12,7 @@ from models.schemas import (
     AlertDrafts, DensityData, AgentOutput, TimelineEntry,
 )
 
-from core.llm import gemini_generate, extract_json
+from core.llm import generate, extract_json
 
 
 SYSTEM_PROMPT = """You are the supervisor of a multi-agent traffic incident management system for Brooklyn, New York.
@@ -128,12 +128,13 @@ async def run_supervisor(
     supervisor_status = {"source": "llm", "error": ""}
 
     try:
-        text = await gemini_generate(
+        text = await generate(
             f"AGENT OUTPUTS:\n{json.dumps(agent_data, indent=2)}\n\nReturn ONLY valid JSON.",
             system=SYSTEM_PROMPT,
             max_tokens=800,
             temperature=0.3,
             json_mode=True,
+            prefer="gemini",  # one call per incident; Groq takes over if Gemini is out of quota
         )
         parsed = extract_json(text)
         if not isinstance(parsed, dict):

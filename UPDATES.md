@@ -13,6 +13,10 @@ Released: October 3, 2026
 - **Borough-wide coverage**: the 250 monitored segments were clustered in east/south Brooklyn; they are now one major-road segment per grid cell across the borough (`scripts/build_segments.py`), so 79% of road edges get live speed and risk (was 29%).
 - **Diversion clearance**: edges whose geometry passes within 200 m of the incident are blocked, not just nearby nodes.
 - **Dashboard**: map flies to a new incident and fits its diversion; chat answers are plain text.
+- **Traffic map redesign**: every Brooklyn road drawn in grey (static `road-network.geojson`), monitored roads coloured green/orange/red along their length, hover card with street and speed; hotspots as subtle rings and the risk heatmap as legend toggles; dots and glow removed.
+- **LLM resilience**: Gemini <-> Groq cross-provider fallback (Gemini's free tier allows only 20 requests/day), second Groq model on per-minute limits, daily-quota keys benched for an hour, `/health` shows runtime `last_errors`. Chat runs on Groq first with a compact prompt.
+- **Chat grounding**: explicit "no incident" context and a rule against inventing figures; diversion facts passed verbatim; compliance stated as not measured.
+- **Operator toggles** stay locked with a hint until the server has an `ADMIN_TOKEN` and the token is saved in the browser.
 - **Pipeline**: runs as a background task under a lock, so the feed keeps ticking and overlapping triggers get 409; alerts run once, after routing; resolve clears all derived state; timeline capped at 200; UTC timestamps.
 - **Phantom incidents**: detector warm-up (1 min) and 3-tick persistence; auto-detect off by default and switchable by the operator.
 - **Security**: tweeting off unless `TWITTER_ENABLED=true`; admin token for settings; one trigger per IP per 30 s; CORS limited to known origins; WebSocket is server-to-client only with an Origin check.

@@ -1,7 +1,7 @@
 """
 Narrative Agent — Conversational TAO loop for officer Q&A.
 TAO = Thought → Action (tool call) → Observation → Answer.
-Uses Gemini Flash with multi-turn memory.
+Uses Groq (gpt-oss) with Gemini as fallback, with multi-turn memory.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from models.schemas import (
     ChatMessage, ChatResponse,
 )
 
-from core.llm import gemini_generate
+from core.llm import generate
 from core.risk_scorer import compute_risk_map
 from rag.retriever import retrieve_sops
 
@@ -28,7 +28,7 @@ The officer stays in command — you handle the cognitive load and give them cle
 AVAILABLE TOOLS (use by including [TOOL_CALL: tool_name(args)] in your thinking):
 - get_speed(street_name) → current speed in mph and % of normal
 - get_risk_score(street_name) → risk score 0-1 with breakdown
-- check_diversion_status() → current diversion route status and compliance
+- check_diversion_status() → current diversion route: streets, risk reduction, share of traffic redirected
 - get_density(street_name) → vehicle density and congestion level
 
 HOW TO RESPOND:
@@ -45,6 +45,7 @@ CRITICAL RULES:
 - Keep answers concise — 2-4 sentences for simple questions, more for complex safety assessments.
 - Write plain text only: no Markdown (no **bold**, no # headings, no bullet symbols). Use short sentences, or simple numbered lines like "1. ..." when listing.
 - Be proactive: if data suggests something the officer should know, mention it.
+- ONLY state facts and numbers that appear in CURRENT SITUATION or tool observations. If the data you need is not there, say plainly that you don't have it. Never estimate or invent figures (compliance rates, flows, percentages).
 
 IMPORTANT: Maintain context across the conversation. Reference previous questions/answers when relevant.
 If the officer asks about safety (e.g., "Is it safe to open the southbound lane?"),
@@ -146,6 +147,39 @@ class NarrativeAgent:
 
         return f"Unknown tool: {tool_name}"
 
+    @staticmethod
+    def _speed_line(seg: SegmentSpeed) -> str:
+        pct = round(seg.speed / seg.free_flow_speed * 100) if seg.free_flow_speed > 0 else 0
+        return (f"  {seg.street_name}: {seg.speed:.0f} mph ({pct}% of {seg.free_flow_speed:.0f} mph free-flow), "
+                f"density {seg.density:.0f} veh/km")
+
+    def _relevant_segments(self, snapshot: list[SegmentSpeed], question: str, limit: int = 30) -> list[SegmentSpeed]:
+        """Streets named in the question, then near the incident, then the most congested."""
+        q = question.lower()
+
+        def named(seg: SegmentSpeed) -> bool:
+            name = seg.street_name.lower()
+            short = name.replace(" avenue", " ave").replace(" street", " st").replace(" boulevard", " blvd")
+            return name in q or short in q or name.split(" ")[0] in q.split()
+
+        mentioned = [s for s in snapshot if named(s)][:10]
+        near: list[SegmentSpeed] = []
+        if self._incident:
+            from core.risk_scorer import _haversine
+            inc = self._incident
+            near = sorted(
+                (s for s in snapshot if _haversine(inc.lat, inc.lon, s.lat, s.lon) < 1.0),
+                key=lambda s: _haversine(inc.lat, inc.lon, s.lat, s.lon),
+            )[:10]
+        congested = sorted(snapshot, key=lambda s: s.speed / max(s.free_flow_speed, 1))[:15]
+
+        chosen, seen = [], set()
+        for s in mentioned + near + congested:
+            if s.segment_id not in seen:
+                seen.add(s.segment_id)
+                chosen.append(s)
+        return chosen[:limit]
+
     async def chat(self, user_message: str, voice: bool = False) -> ChatResponse:
         """Process officer's question through TAO loop."""
         self._messages.append(ChatMessage(
@@ -178,15 +212,17 @@ class NarrativeAgent:
                 f"Description: {self._incident.description}"
             )
 
-        # Inject live traffic data so Gemini can answer any street question
+        else:
+            context_parts.append("ACTIVE INCIDENT: none. No diversion, signal plan or alerts are active.")
+
+        # Live traffic data: a focused selection keeps the prompt small (LLM free tiers
+        # cap tokens per minute) while covering what the officer is likely asking about
         live_snapshot = self._get_live_snapshot()
         if live_snapshot:
-            # Build a compact speed table for the LLM
-            speed_lines = []
-            for seg in live_snapshot:
-                pct = round(seg.speed / seg.free_flow_speed * 100) if seg.free_flow_speed > 0 else 0
-                speed_lines.append(f"  {seg.street_name}: {seg.speed:.0f} mph ({pct}% of {seg.free_flow_speed:.0f} mph free-flow), density {seg.density:.0f} veh/km")
-            context_parts.append("LIVE SENSOR DATA (all monitored streets):\n" + "\n".join(speed_lines))
+            context_parts.append(
+                "LIVE SENSOR DATA (selected monitored streets; others are not listed):\n"
+                + "\n".join(self._speed_line(seg) for seg in self._relevant_segments(live_snapshot, user_message))
+            )
 
         if self._agent_output:
             if self._agent_output.signal_recommendations:
@@ -195,7 +231,12 @@ class NarrativeAgent:
                 context_parts.append("SIGNAL RECOMMENDATIONS:\n" + "\n".join(sigs))
             if self._agent_output.diversion:
                 d = self._agent_output.diversion
-                context_parts.append(f"DIVERSION: via {' → '.join(d.route_street_names[:4])}, {d.risk_delta_pct}% safer")
+                context_parts.append(
+                    f"DIVERSION (planned, not measured): via {' → '.join(d.route_street_names[:6])}; "
+                    f"{d.risk_delta_pct}% lower risk than the incident segment; about {d.time_delta_min} min longer; "
+                    f"model estimate {d.diversion_volume_pct}% of traffic redirected. "
+                    "Driver compliance with the diversion is NOT measured — never report a compliance figure."
+                )
             if self._agent_output.final_summary:
                 context_parts.append(f"SUMMARY: {self._agent_output.final_summary}")
 
@@ -225,8 +266,9 @@ Respond to the officer's latest question naturally and conversationally. Use too
 Synthesize any reference knowledge into your own words — never copy it verbatim. Then provide the final answer."""
 
         try:
-            response_text = await gemini_generate(
-                prompt, max_tokens=256 if voice else 1024, temperature=0.4,
+            # Chat is the busiest caller: Groq first (generous limits), Gemini as fallback
+            response_text = await generate(
+                prompt, max_tokens=400 if voice else 1024, temperature=0.4, prefer="groq",
             )
             thinking = ""
             tool_calls = []
@@ -246,10 +288,11 @@ Synthesize any reference knowledge into your own words — never copy it verbati
                     "Do NOT include [TOOL_CALL:...] markers in your answer."
                 )
                 thinking = response_text
-                response_text = await gemini_generate(
+                response_text = await generate(
                     f"{prompt}\n\nTOOL OBSERVATIONS:\n{observations}\n\n{follow_up}",
-                    max_tokens=256 if voice else 800,
+                    max_tokens=400 if voice else 800,
                     temperature=0.3,
+                    prefer="groq",
                 )
 
         except Exception as e:

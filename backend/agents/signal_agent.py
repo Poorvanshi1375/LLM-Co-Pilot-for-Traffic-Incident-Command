@@ -97,7 +97,7 @@ Return ONLY the JSON object."""
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            max_tokens=1500,
+            max_tokens=1000,
             temperature=0.3,
             json_mode=True,
         )

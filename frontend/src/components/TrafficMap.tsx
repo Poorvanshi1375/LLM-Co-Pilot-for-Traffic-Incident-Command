@@ -2,16 +2,17 @@
 "use client";
 
 import { useMemo, useCallback, useEffect, useState, useRef } from "react";
-import Map, { Source, Layer, Marker, NavigationControl, type MapRef } from "react-map-gl/mapbox";
+import Map, { Source, Layer, Marker, NavigationControl, type MapRef, type MapMouseEvent } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useTrafficStore } from "@/lib/store";
 import { speedToColor, severityColor } from "@/lib/utils";
 import { api, errorMessage } from "@/lib/api";
-import { Search, MapPin, X, Loader2 } from "lucide-react";
+import { MapPin, X, Loader2 } from "lucide-react";
 import type { SegmentSpeed, GeocodeSuggestion } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 const BROOKLYN_CENTER = { longitude: -73.9442, latitude: 40.6782, zoom: 12.5 };
+const NO_DATA_COLOR = "#9ca3af";
 
 export default function TrafficMap() {
   const segments = useTrafficStore((s) => s.segments);
@@ -28,7 +29,6 @@ export default function TrafficMap() {
   const candidateRoutes = useTrafficStore((s) => s.candidateRoutes);
   const setCandidateRoutes = useTrafficStore((s) => s.setCandidateRoutes);
   const selectedRouteIndex = useTrafficStore((s) => s.selectedRouteIndex);
-  const setSelectedRouteIndex = useTrafficStore((s) => s.setSelectedRouteIndex);
   const vehicleType = useTrafficStore((s) => s.vehicleType);
   const routeLoading = useTrafficStore((s) => s.routeLoading);
   const setRouteLoading = useTrafficStore((s) => s.setRouteLoading);
@@ -151,7 +151,7 @@ export default function TrafficMap() {
   }, [setRouteDestination]);
 
   // Map click in route mode
-  const handleMapClick = useCallback((e: any) => {
+  const handleMapClick = useCallback((e: MapMouseEvent) => {
     if (dashboardMode !== "route") return;
     const { lng, lat } = e.lngLat;
     if (!routeOrigin) {
@@ -163,102 +163,40 @@ export default function TrafficMap() {
     }
   }, [dashboardMode, routeOrigin, routeDestination, setRouteOrigin, setRouteDestination]);
 
-  // Segment Points GeoJSON
-  const segmentGeoJSON = useMemo(() => ({
-    type: "FeatureCollection" as const,
-    features: segments.map((seg: SegmentSpeed) => ({
-      type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [seg.lon, seg.lat] },
-      properties: {
-        color: speedToColor(seg.speed, seg.free_flow_speed),
-        speed: Math.round(seg.speed),
-        name: seg.street_name,
-      },
-    })),
-  }), [segments]);
-
-  // Road segment lines GeoJSON — group by street, connect into polylines for Google-Maps-style traffic coloring
-  const roadLinesGeoJSON = useMemo(() => {
-    // Group segments by street name
-    const byStreet: Record<string, SegmentSpeed[]> = {};
-    for (const seg of segments) {
-      const key = seg.street_name;
-      if (!byStreet[key]) byStreet[key] = [];
-      byStreet[key].push(seg);
-    }
-
-    const features: any[] = [];
-    for (const [, segs] of Object.entries(byStreet)) {
-      if (segs.length === 0) continue;
-
-      // Sort by lat then lon for consistent polyline direction
-      const sorted = [...segs].sort((a, b) => a.lat !== b.lat ? a.lat - b.lat : a.lon - b.lon);
-
-      // Build connected polyline coordinates and compute average color
-      const coords = sorted.map(s => [s.lon, s.lat]);
-      let totalRatio = 0;
-      for (const s of sorted) {
-        totalRatio += s.free_flow_speed > 0 ? s.speed / s.free_flow_speed : 0.5;
-      }
-      const avgRatio = totalRatio / sorted.length;
-
-      // If segments are far apart (>500m), split into sub-groups to avoid cross-map lines
-      const groups: SegmentSpeed[][] = [[]];
-      for (let i = 0; i < sorted.length; i++) {
-        const cur = sorted[i];
-        const lastGroup = groups[groups.length - 1];
-        if (lastGroup.length === 0) {
-          lastGroup.push(cur);
-        } else {
-          const prev = lastGroup[lastGroup.length - 1];
-          const dist = Math.sqrt((cur.lat - prev.lat) ** 2 + (cur.lon - prev.lon) ** 2);
-          if (dist < 0.005) { // ~500m threshold
-            lastGroup.push(cur);
-          } else {
-            groups.push([cur]);
-          }
-        }
-      }
-
-      for (const group of groups) {
-        if (group.length < 1) continue;
-
-        // Extend each point with bearing to create road-like segments
-        const DEG_TO_RAD = Math.PI / 180;
-        const EXT = 0.0008; // extend ~90m in bearing direction at each end
-
-        let lineCoords: number[][] = [];
-        if (group.length === 1) {
-          // Single point — use bearing to create segment
-          const s = group[0];
-          const b = (s.bearing ?? 0) * DEG_TO_RAD;
-          const dx = Math.sin(b) * EXT;
-          const dy = Math.cos(b) * EXT;
-          lineCoords = [[s.lon - dx, s.lat - dy], [s.lon + dx, s.lat + dy]];
-        } else {
-          lineCoords = group.map(s => [s.lon, s.lat]);
-        }
-
-        // Color per-segment group
-        let grpRatio = 0;
-        for (const s of group) {
-          grpRatio += s.free_flow_speed > 0 ? s.speed / s.free_flow_speed : 0.5;
-        }
-        grpRatio /= group.length;
-
-        features.push({
-          type: "Feature" as const,
-          geometry: { type: "LineString" as const, coordinates: lineCoords },
-          properties: {
-            color: speedToColor(grpRatio * 30, 30), // pass ratio through speedToColor
-            speed: Math.round(grpRatio * 100),
-          },
-        });
-      }
-    }
-
-    return { type: "FeatureCollection" as const, features };
+  // Live colour per monitored segment: the static road layer (public/road-network.geojson)
+  // tags each road with the segment ("s") on the same street that colours it
+  const segmentById = useMemo(() => {
+    const m: Record<string, SegmentSpeed> = {};
+    for (const seg of segments) m[seg.segment_id] = seg;
+    return m;
   }, [segments]);
+
+  const trafficColor = useMemo(() => {
+    if (!segments.length) return NO_DATA_COLOR;
+    const expr: unknown[] = ["match", ["get", "s"]];
+    for (const seg of segments) expr.push(seg.segment_id, speedToColor(seg.speed, seg.free_flow_speed));
+    expr.push(NO_DATA_COLOR);
+    return expr as unknown as string;
+  }, [segments]);
+
+  // Hover card for coloured roads
+  const [hover, setHover] = useState<{ x: number; y: number; seg: SegmentSpeed } | null>(null);
+  const handleMouseMove = useCallback((e: MapMouseEvent) => {
+    const id = e.features?.[0]?.properties?.s;
+    const seg = id ? segmentById[id] : undefined;
+    setHover(seg ? { x: e.point.x, y: e.point.y, seg } : null);
+  }, [segmentById]);
+
+  // Optional overlays (legend toggles)
+  const [showHotspots, setShowHotspots] = useState(true);
+  const [showRiskHeat, setShowRiskHeat] = useState(false);
+
+  // Draw our road lines under the base map's labels so street names stay readable
+  const [labelLayerId, setLabelLayerId] = useState<string | undefined>(undefined);
+  const handleLoad = useCallback(() => {
+    const layers = mapRef.current?.getStyle()?.layers ?? [];
+    setLabelLayerId(layers.find((l) => l.type === "symbol")?.id);
+  }, []);
 
   // Risk heatmap GeoJSON
   const riskGeoJSON = useMemo(() => ({
@@ -315,64 +253,65 @@ export default function TrafficMap() {
         mapStyle="mapbox://styles/mapbox/light-v11"
         mapboxAccessToken={MAPBOX_TOKEN}
         attributionControl={false}
-        cursor={isRouteMode ? "crosshair" : "grab"}
+        cursor={isRouteMode ? "crosshair" : hover ? "pointer" : "grab"}
         onClick={handleMapClick}
+        onLoad={handleLoad}
+        interactiveLayerIds={isRouteMode ? [] : ["roads-traffic"]}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHover(null)}
       >
         <NavigationControl position="top-left" />
 
-        {/* Risk Heatmap Layer (overview mode) */}
+        {/* Every road, grey; monitored roads coloured by live speed (overview mode) */}
         {!isRouteMode && (
-          <Source id="risk-heatmap" type="geojson" data={riskGeoJSON}>
+          <Source id="road-network" type="geojson" data="/road-network.geojson">
             <Layer
-              id="risk-heat"
-              type="heatmap"
+              id="roads-base"
+              type="line"
+              beforeId={labelLayerId}
               paint={{
-                "heatmap-weight": ["get", "risk"],
-                "heatmap-intensity": 1.5,
-                "heatmap-radius": 30,
-                "heatmap-opacity": 0.4,
-                "heatmap-color": [
-                  "interpolate", ["linear"], ["heatmap-density"],
-                  0, "rgba(0,0,0,0)",
-                  0.2, "rgba(16,185,129,0.4)",
-                  0.4, "rgba(245,158,11,0.5)",
-                  0.6, "rgba(249,115,22,0.6)",
-                  0.8, "rgba(239,68,68,0.7)",
-                  1, "rgba(220,38,38,0.9)",
+                "line-color": ["match", ["get", "c"], 0, "#9ca3af", 1, "#a8b0bc", 2, "#b8bfca", "#cfd4db"],
+                "line-width": [
+                  "interpolate", ["linear"], ["zoom"],
+                  11, ["match", ["get", "c"], 0, 1.6, 1, 1.2, 2, 0.8, 0.3],
+                  15, ["match", ["get", "c"], 0, 5, 1, 4, 2, 3, 1.5],
                 ],
               }}
+              layout={{ "line-cap": "round", "line-join": "round" }}
             />
-          </Source>
-        )}
-
-        {/* Road segment lines colored by speed (overview mode) */}
-        {!isRouteMode && (
-          <Source id="road-lines" type="geojson" data={roadLinesGeoJSON}>
             <Layer
-              id="road-line-layer"
+              id="roads-traffic"
               type="line"
+              beforeId={labelLayerId}
+              filter={["has", "s"]}
               paint={{
-                "line-color": ["get", "color"],
-                "line-width": 6,
-                "line-opacity": 0.9,
+                "line-color": trafficColor,
+                "line-width": ["interpolate", ["linear"], ["zoom"], 11, 2.2, 15, 6],
               }}
               layout={{ "line-cap": "round", "line-join": "round" }}
             />
           </Source>
         )}
 
-        {/* Speed points (overview mode) */}
-        {!isRouteMode && (
-          <Source id="segments" type="geojson" data={segmentGeoJSON}>
+        {/* Risk heatmap — optional overlay */}
+        {!isRouteMode && showRiskHeat && (
+          <Source id="risk-heatmap" type="geojson" data={riskGeoJSON}>
             <Layer
-              id="segment-circles"
-              type="circle"
+              id="risk-heat"
+              type="heatmap"
+              beforeId={labelLayerId}
               paint={{
-                "circle-radius": 4,
-                "circle-color": ["get", "color"],
-                "circle-stroke-width": 1,
-                "circle-stroke-color": "#ffffff",
-                "circle-opacity": 0.9,
+                "heatmap-weight": ["get", "risk"],
+                "heatmap-intensity": 1.2,
+                "heatmap-radius": 30,
+                "heatmap-opacity": 0.35,
+                "heatmap-color": [
+                  "interpolate", ["linear"], ["heatmap-density"],
+                  0, "rgba(0,0,0,0)",
+                  0.3, "rgba(245,158,11,0.4)",
+                  0.7, "rgba(239,68,68,0.6)",
+                  1, "rgba(220,38,38,0.8)",
+                ],
               }}
             />
           </Source>
@@ -394,26 +333,21 @@ export default function TrafficMap() {
           </Source>
         )}
 
-        {/* Predicted Hotspot Zones (both modes) */}
-        {predictedHotspots.length > 0 && (
+        {/* Predicted hotspot zones — subtle rings, toggled from the legend */}
+        {showHotspots && predictedHotspots.length > 0 && (
           <Source id="predicted-hotspots" type="geojson" data={hotspotGeoJSON}>
             <Layer
               id="hotspot-circles"
               type="circle"
               paint={{
                 "circle-radius": [
-                  "interpolate", ["linear"], ["get", "risk_score"],
-                  5, 12, 20, 22, 50, 35,
+                  "interpolate", ["linear"], ["zoom"],
+                  11, ["interpolate", ["linear"], ["get", "risk_score"], 5, 6, 50, 14],
+                  15, ["interpolate", ["linear"], ["get", "risk_score"], 5, 18, 50, 40],
                 ],
-                "circle-color": [
-                  "interpolate", ["linear"], ["get", "risk_score"],
-                  5, "rgba(251, 146, 60, 0.5)",
-                  20, "rgba(239, 68, 68, 0.55)",
-                  50, "rgba(185, 28, 28, 0.6)",
-                ],
-                "circle-stroke-width": 1.5,
-                "circle-stroke-color": "rgba(220, 38, 38, 0.7)",
-                "circle-opacity": 0.6,
+                "circle-color": "rgba(220, 38, 38, 0.06)",
+                "circle-stroke-width": 1.25,
+                "circle-stroke-color": "rgba(220, 38, 38, 0.45)",
               }}
             />
           </Source>
@@ -584,28 +518,49 @@ export default function TrafficMap() {
           <>
             <div className="flex items-center gap-1.5 mb-1">
               <div className="w-5 h-1 rounded bg-emerald-500" />
-              <span className="text-slate-600">Clear — Good to go</span>
+              <span className="text-slate-600">Moving well (over 70% of normal)</span>
             </div>
             <div className="flex items-center gap-1.5 mb-1">
               <div className="w-5 h-1 rounded bg-amber-500" />
-              <span className="text-slate-600">Slow — Possible congestion</span>
+              <span className="text-slate-600">Slow (40–70%)</span>
             </div>
             <div className="flex items-center gap-1.5 mb-1">
               <div className="w-5 h-1 rounded bg-red-500" />
-              <span className="text-slate-600">Congested — Avoid</span>
+              <span className="text-slate-600">Congested (under 40%)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-5 h-0.5 rounded bg-slate-400" />
+              <span className="text-slate-500">No live sensor</span>
             </div>
           </>
         )}
-        {predictedHotspots.length > 0 && (
-          <>
-            <div className="border-t border-slate-200 my-1.5" />
-            <div className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-full bg-red-400/60 border border-red-500/70" />
-              <span className="text-slate-600">Predicted Hotspot</span>
-            </div>
-          </>
+        <div className="border-t border-slate-200 my-1.5" />
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+          <input type="checkbox" checked={showHotspots} onChange={(e) => setShowHotspots(e.target.checked)} className="accent-red-500" />
+          <span className="w-3 h-3 rounded-full bg-red-500/10 border border-red-500/50" />
+          <span className="text-slate-600">Predicted hotspots</span>
+        </label>
+        {!isRouteMode && (
+          <label className="flex items-center gap-1.5 mt-1 cursor-pointer select-none">
+            <input type="checkbox" checked={showRiskHeat} onChange={(e) => setShowRiskHeat(e.target.checked)} className="accent-red-500" />
+            <span className="w-3 h-3 rounded-full bg-gradient-to-br from-amber-300/60 to-red-500/60" />
+            <span className="text-slate-600">Risk heatmap</span>
+          </label>
         )}
       </div>
+
+      {/* Hover card for a coloured road */}
+      {hover && (
+        <div
+          className="pointer-events-none absolute z-20 bg-white/95 border border-slate-200 rounded-md shadow px-2.5 py-1.5 text-[11px]"
+          style={{ left: hover.x + 12, top: hover.y + 12 }}
+        >
+          <p className="font-semibold text-foreground">{hover.seg.street_name}</p>
+          <p className="text-slate-600">
+            {Math.round(hover.seg.speed)} mph · {Math.round((hover.seg.speed / Math.max(hover.seg.free_flow_speed, 1)) * 100)}% of normal ({Math.round(hover.seg.free_flow_speed)} mph)
+          </p>
+        </div>
+      )}
     </div>
   );
 }

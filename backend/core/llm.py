@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from google import genai
@@ -18,6 +19,7 @@ from core.key_manager import KeyPool, gemini_pool, groq_pool
 
 # llama-3.3-70b-versatile was removed from Groq; gpt-oss-120b is the large general model there now
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # Gemini 2.5 counts thinking tokens against max_output_tokens; 0 turns thinking off
 GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
@@ -26,6 +28,10 @@ LLM_ATTEMPTS = 2
 
 AUTH_COOLDOWN_S = 600
 RATE_LIMIT_COOLDOWN_S = 60
+DAILY_QUOTA_COOLDOWN_S = 3600  # e.g. Gemini free tier: 20 requests/day per model
+
+# Most recent runtime failure per provider, cleared on success (shown by /health)
+LAST_ERRORS: dict[str, dict] = {}
 
 
 class LLMError(Exception):
@@ -58,15 +64,24 @@ def call_with_failover(pool: KeyPool, provider: str, fn):
     for _ in range(min(LLM_ATTEMPTS, len(pool))):
         key = pool.next()
         try:
-            return fn(key)
+            result = fn(key)
+            LAST_ERRORS.pop(provider, None)
+            return result
         except Exception as e:  # noqa: BLE001 — any provider error triggers failover
             last = e
             status = _status_code(e)
             if status in (401, 403):
                 pool.mark_failed(key, AUTH_COOLDOWN_S)
             elif status == 429:
-                pool.mark_failed(key, RATE_LIMIT_COOLDOWN_S)
-    raise LLMError(f"{provider}: {type(last).__name__}: {str(last)[:200]}")
+                daily = "PerDay" in str(e)
+                pool.mark_failed(key, DAILY_QUOTA_COOLDOWN_S if daily else RATE_LIMIT_COOLDOWN_S)
+    message = f"{provider}: {type(last).__name__}: {str(last)[:200]}"
+    LAST_ERRORS[provider] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "status": _status_code(last) if last else None,
+        "error": message,
+    }
+    raise LLMError(message)
 
 
 async def groq_chat(
@@ -76,24 +91,39 @@ async def groq_chat(
     temperature: float = 0.3,
     json_mode: bool = False,
 ) -> str:
-    """Chat completion on Groq; returns the message text."""
-    extra: dict = {"response_format": {"type": "json_object"}} if json_mode else {}
-    if GROQ_MODEL.startswith("openai/gpt-oss"):
-        # Reasoning tokens count against max_tokens; low effort keeps answers fast and complete
-        extra["reasoning_effort"] = "low"
+    """Chat completion on Groq; returns the message text.
+
+    Groq rate limits are per model (free tier: 8,000 tokens/minute each), so a
+    429 on the main model retries once on GROQ_FALLBACK_MODEL before failing.
+    """
+    def extra_for(model: str) -> dict:
+        extra: dict = {"response_format": {"type": "json_object"}} if json_mode else {}
+        if model.startswith("openai/gpt-oss"):
+            # Reasoning tokens count against max_tokens; low effort keeps answers fast and complete
+            extra["reasoning_effort"] = "low"
+        return extra
+
+    models = [GROQ_MODEL] + ([GROQ_FALLBACK_MODEL] if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL else [])
 
     def fn(key: str) -> str:
-        response = groq_client(key).chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **extra,
-        )
-        content = response.choices[0].message.content
-        if not content:
-            raise LLMError("groq: empty response")
-        return content
+        for i, model in enumerate(models):
+            try:
+                response = groq_client(key).chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **extra_for(model),
+                )
+            except Exception as e:  # noqa: BLE001
+                if _status_code(e) == 429 and i + 1 < len(models):
+                    continue  # this model's per-minute budget is spent; try the next one
+                raise
+            content = response.choices[0].message.content
+            if not content:
+                raise LLMError("groq: empty response")
+            return content
+        raise LLMError("groq: no model available")
 
     return await asyncio.to_thread(call_with_failover, groq_pool(), "groq", fn)
 
@@ -128,6 +158,35 @@ async def gemini_generate(
         return text
 
     return await asyncio.to_thread(call_with_failover, gemini_pool(), "gemini", fn)
+
+
+async def generate(
+    prompt: str,
+    *,
+    max_tokens: int,
+    temperature: float = 0.3,
+    system: str | None = None,
+    json_mode: bool = False,
+    prefer: str = "gemini",
+) -> str:
+    """Text generation with cross-provider fallback (Gemini <-> Groq).
+
+    One provider being down or out of quota never takes an agent offline:
+    the same prompt goes to the other provider before callers fall back to rules.
+    """
+    order = ("gemini", "groq") if prefer == "gemini" else ("groq", "gemini")
+    errors = []
+    for provider in order:
+        try:
+            if provider == "gemini":
+                return await gemini_generate(
+                    prompt, max_tokens=max_tokens, temperature=temperature, system=system, json_mode=json_mode,
+                )
+            messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+            return await groq_chat(messages, max_tokens=max_tokens, temperature=temperature, json_mode=json_mode)
+        except LLMError as e:
+            errors.append(str(e))
+    raise LLMError(" | ".join(errors))
 
 
 def extract_json(text: str) -> dict | list:

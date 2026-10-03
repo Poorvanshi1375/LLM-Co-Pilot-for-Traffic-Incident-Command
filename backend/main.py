@@ -23,6 +23,7 @@ from core.risk_scorer import compute_risk_map, get_hotspots
 from core.graph import TrafficGraph, AlreadyProcessingError
 from core import road_graph
 from core.llm_health import check_llms, get_status as get_llm_status
+from core.llm import LAST_ERRORS as LLM_LAST_ERRORS
 from integrations.twitter_poster import twitter_enabled
 from pydantic import BaseModel
 from models.schemas import (
@@ -200,6 +201,8 @@ async def health():
             "checked_at": llm["checked_at"],
             "groq": llm["groq"],
             "gemini": llm["gemini"],
+            # Runtime failures (e.g. quota exhausted) that a key check cannot see
+            "last_errors": LLM_LAST_ERRORS,
         },
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

@@ -66,6 +66,14 @@ export default function Sidebar() {
     }
   };
 
+  // Operator-only toggles need a server-side ADMIN_TOKEN and the token saved in this browser
+  const canOperate = Boolean(settings?.admin_configured && hasToken);
+  const operatorHint = canOperate
+    ? ""
+    : settings && !settings.admin_configured
+      ? " (locked: no ADMIN_TOKEN on server)"
+      : " (enter the operator token below to change)";
+
   const saveToken = () => {
     setAdminToken(tokenInput.trim());
     setHasToken(Boolean(tokenInput.trim()));
@@ -324,7 +332,7 @@ export default function Sidebar() {
           </div>
           <Toggle
             on={autoPost}
-            disabled={!settings?.twitter_enabled}
+            disabled={!settings?.twitter_enabled || (!canOperate && !autoPost)}
             onClick={toggleAutoPost}
             label="Auto-post tweets"
           />
@@ -332,7 +340,7 @@ export default function Sidebar() {
         <p className="text-[10px] text-muted mt-1 pl-5.5">
           {!settings?.twitter_enabled
             ? "Posting is disabled on this server"
-            : autoPost ? "Tweets post when incidents are processed" : "Tweet auto-posting off (operator only)"}
+            : autoPost ? "Tweets post when incidents are processed" : `Tweet auto-posting off${operatorHint}`}
         </p>
       </div>
 
@@ -345,7 +353,7 @@ export default function Sidebar() {
           </div>
           <Toggle
             on={Boolean(settings?.auto_detect)}
-            disabled={!settings}
+            disabled={!settings || !canOperate}
             onClick={toggleAutoDetect}
             label="Auto-detect incidents"
           />
@@ -353,7 +361,7 @@ export default function Sidebar() {
         <p className="text-[10px] text-muted mt-1 pl-5.5">
           {settings?.auto_detect
             ? "Agents run when the feed shows a sustained slowdown"
-            : "Off — use Simulate Incident (operator can enable)"}
+            : `Off — use Simulate Incident${operatorHint}`}
         </p>
       </div>
 
@@ -363,7 +371,11 @@ export default function Sidebar() {
           <KeyRound className="w-3.5 h-3.5" />
           <span>Operator Access</span>
         </div>
-        {hasToken ? (
+        {settings && !settings.admin_configured ? (
+          <p className="pl-5.5 text-[10px] text-muted">
+            Not configured on this server (no ADMIN_TOKEN), so operator settings are locked.
+          </p>
+        ) : hasToken ? (
           <div className="flex items-center justify-between pl-5.5 text-[10px]">
             <span className="text-success">Token saved in this browser</span>
             <button
