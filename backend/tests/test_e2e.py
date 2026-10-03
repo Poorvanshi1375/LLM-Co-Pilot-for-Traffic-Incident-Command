@@ -90,6 +90,15 @@ def test_cors_rejects_unknown_origin(client):
     assert "access-control-allow-origin" not in r.headers
 
 
+@pytest.mark.parametrize("origin", [
+    "https://llm-co-pilot-for-traffic-incident-c.vercel.app",                 # production domain
+    "https://llm-co-pilot-for-traffic-incident-command-714b6sigf.vercel.app",  # deployment URL
+])
+def test_cors_allows_the_vercel_frontend(client, origin):
+    r = client.get("/health", headers={"Origin": origin})
+    assert r.headers.get("access-control-allow-origin") == origin
+
+
 def test_incident_lifecycle(client):
     client.post("/api/resolve-incident")
 

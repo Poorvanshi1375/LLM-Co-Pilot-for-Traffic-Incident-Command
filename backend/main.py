@@ -43,13 +43,20 @@ import csv
 
 APP_VERSION = "3.0.0"
 
-# Browser origins allowed to call the API (comma-separated), plus an optional
-# regex for Vercel preview URLs, e.g. https://llm-co-pilot-.*\.vercel\.app
+# Browser origins allowed to call the API (comma-separated), plus a regex for
+# this project's Vercel URLs. Vercel shortens the project name in the production
+# domain (llm-co-pilot-for-traffic-incident-c.vercel.app); preview URLs keep it
+# (llm-co-pilot-for-traffic-incident-command-<hash>.vercel.app). Both match.
 ALLOWED_ORIGINS = [
-    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()
+    o.strip()
+    for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "https://llm-co-pilot-for-traffic-incident-c.vercel.app,http://localhost:3000",
+    ).split(",")
+    if o.strip()
 ]
 ALLOWED_ORIGIN_REGEX = os.getenv(
-    "ALLOWED_ORIGIN_REGEX", r"https://llm-co-pilot-for-traffic-incident-command[a-z0-9-]*\.vercel\.app"
+    "ALLOWED_ORIGIN_REGEX", r"https://llm-co-pilot-for-traffic-incident-c[a-z0-9-]*\.vercel\.app"
 ) or None
 
 # Operator token for settings that affect everyone (auto-post, auto-detect)
