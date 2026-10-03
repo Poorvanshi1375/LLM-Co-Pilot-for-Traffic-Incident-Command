@@ -113,6 +113,8 @@ async def gemini_generate(
         system_instruction=system,
         response_mime_type="application/json" if json_mode else None,
         thinking_config=types.ThinkingConfig(thinking_budget=GEMINI_THINKING_BUDGET),
+        # No function tools are passed; turning AFC off also silences an SDK warning
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
     def fn(key: str) -> str:

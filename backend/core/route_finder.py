@@ -26,12 +26,11 @@ VEHICLE_PROFILES = {
 
 DIVERSITY_PENALTY = 5.0  # cost multiplier on edges already used by an earlier route
 
-# Route colour reflects the route's average risk score, not its rank
-RISK_COLORS = [
-    (0.35, "#10B981", "low"),       # green
-    (0.50, "#F59E0B", "moderate"),  # amber
-    (9.99, "#EF4444", "high"),      # red
-]
+# Route colour reflects the route's average risk relative to the whole network
+# right now (percentile of live segment risk), not its rank: a fixed cut-off
+# turns every route red at rush hour, when all risk scores rise together.
+RISK_COLORS = {"low": "#10B981", "moderate": "#F59E0B", "high": "#EF4444"}
+LOW_PCT, HIGH_PCT = 0.40, 0.75
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -99,9 +98,36 @@ class EdgeCosts:
         self._memo[key] = result
         return result
 
+    def risk_level(self, route_risk: float) -> str:
+        """low / moderate / high against the live network's risk distribution."""
+        scores = sorted(r.get("score", 0.1) for r in self.risk.values())
+        if not scores:
+            return "low"
+        below = sum(1 for x in scores if x < route_risk) / len(scores)
+        if below < LOW_PCT:
+            return "low"
+        return "moderate" if below < HIGH_PCT else "high"
+
     def cost(self, u, v, data: dict) -> float:
         minutes, risk, _, weather = self.metrics(u, v, data)
         return minutes * (1.0 + risk * self.profile["risk_tolerance"]) * weather
+
+
+def _edges_near(G: nx.DiGraph, lat: float, lon: float, radius_km: float) -> set[tuple]:
+    """Edges whose end points or curve points come within radius_km of (lat, lon).
+
+    Blocking nodes alone is not enough: a long edge can pass the incident
+    with both of its end nodes outside the radius.
+    """
+    near = set()
+    for u, v, d in G.edges(data=True):
+        points = [(G.nodes[u]["x"], G.nodes[u]["y"]), (G.nodes[v]["x"], G.nodes[v]["y"])]
+        points += [tuple(pt) for pt in d.get("shape", [])]
+        # Also test segment midpoints so straight two-node edges are caught
+        points += [((ax + bx) / 2, (ay + by) / 2) for (ax, ay), (bx, by) in zip(points[:-1], points[1:])]
+        if any(_haversine_km(lat, lon, y, x) < radius_km for x, y in points):
+            near.add((u, v))
+    return near
 
 
 def _cross_street(G: nx.DiGraph, node, street: str) -> str | None:
@@ -124,13 +150,15 @@ def diverse_paths(
     k: int,
     costs: EdgeCosts,
     blocked_nodes: set | None = None,
+    blocked_edges: set | None = None,
 ) -> list[list]:
     """Up to k paths, each penalising edges used by the ones before it."""
     blocked = blocked_nodes or set()
+    no_edges = blocked_edges or set()
     penalty: dict[tuple, float] = {}
 
     def weight(u, v, d):
-        if u in blocked or v in blocked:
+        if u in blocked or v in blocked or (u, v) in no_edges:
             return None  # hides the edge
         return costs.cost(u, v, d) * penalty.get((u, v), 1.0)
 
@@ -225,7 +253,8 @@ def find_routes(
     routes = []
     for idx, path in enumerate(diverse_paths(G, orig_node, dest_node, k, costs)):
         info = describe_path(G, path, costs, vehicle_type)
-        color, level = next((c, lvl) for limit, c, lvl in RISK_COLORS if info["avg_accident_score"] < limit)
+        level = costs.risk_level(info["avg_accident_score"])
+        color = RISK_COLORS[level]
         routes.append({
             "route_index": idx,
             "rank": "optimal" if idx == 0 else "alternative",
@@ -257,6 +286,7 @@ def find_diversion(
     G = get_graph()
     costs = EdgeCosts(feed_snapshot, risk_map, "normal", weather_condition)
     blocked = set(nodes_within(incident_lat, incident_lon, block_radius_km))
+    blocked_edges = _edges_near(G, incident_lat, incident_lon, block_radius_km)
 
     ring = set(nodes_within(incident_lat, incident_lon, ring_km[1])) - set(
         nodes_within(incident_lat, incident_lon, ring_km[0])
@@ -280,7 +310,7 @@ def find_diversion(
     entry = max(nodes, key=lambda n: _haversine_km(*pos(far), *pos(n)))
 
     for source, target in ((entry, far), (far, entry)):
-        paths = diverse_paths(G, source, target, 1, costs, blocked_nodes=blocked)
+        paths = diverse_paths(G, source, target, 1, costs, blocked_nodes=blocked, blocked_edges=blocked_edges)
         if paths:
             info = describe_path(G, paths[0], costs)
             # Baseline: the direct trip between the same points under normal
@@ -288,9 +318,7 @@ def find_diversion(
             normal = EdgeCosts()
             direct = diverse_paths(G, source, target, 1, normal)
             direct_min = describe_path(G, direct[0], normal)["total_travel_time_min"] if direct else info["total_travel_time_min"]
-            blocked_streets = sorted({
-                street_name(d) for n in blocked for _, _, d in G.edges(n, data=True)
-            } - {"Unknown"})
+            blocked_streets = sorted({street_name(G[u][v]) for u, v in blocked_edges} - {"Unknown"})
             return {
                 **info,
                 "extra_minutes": round(max(0.0, info["total_travel_time_min"] - direct_min), 1),

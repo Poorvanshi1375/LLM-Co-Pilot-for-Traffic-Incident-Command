@@ -9,7 +9,10 @@ Released: October 3, 2026
 - **Honest output**: every agent result carries `source: llm | fallback`; the UI shows a "Rule-based fallback" badge. Illustrative metrics are labelled.
 - **Real diversion routes**: the diversion is now a weighted shortest path on the road graph around a blocked 200 m zone, following road curves, with extra minutes against the normal direct trip.
 - **Fits the free tier**: the road graph is prebuilt to a 1.3 MB file and loaded once; hotspots are precomputed; osmnx, scikit-learn and pandas left the runtime. Local server memory dropped to about 175 MB.
-- **Route planning**: per-request weight function (no shared-graph mutation), real minutes, routes coloured by average risk.
+- **Route planning**: per-request weight function (no shared-graph mutation), real minutes, routes coloured by average risk relative to the live network.
+- **Borough-wide coverage**: the 250 monitored segments were clustered in east/south Brooklyn; they are now one major-road segment per grid cell across the borough (`scripts/build_segments.py`), so 79% of road edges get live speed and risk (was 29%).
+- **Diversion clearance**: edges whose geometry passes within 200 m of the incident are blocked, not just nearby nodes.
+- **Dashboard**: map flies to a new incident and fits its diversion; chat answers are plain text.
 - **Pipeline**: runs as a background task under a lock, so the feed keeps ticking and overlapping triggers get 409; alerts run once, after routing; resolve clears all derived state; timeline capped at 200; UTC timestamps.
 - **Phantom incidents**: detector warm-up (1 min) and 3-tick persistence; auto-detect off by default and switchable by the operator.
 - **Security**: tweeting off unless `TWITTER_ENABLED=true`; admin token for settings; one trigger per IP per 30 s; CORS limited to known origins; WebSocket is server-to-client only with an Origin check.

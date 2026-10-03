@@ -134,7 +134,7 @@ export default function Sidebar() {
       <div className="px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2 text-xs text-muted mb-1">
           <Clock className="w-3.5 h-3.5" />
-          <span>Current Time</span>
+          <span>Brooklyn Time</span>
         </div>
         <p className="text-lg font-semibold text-foreground pl-5.5">
           {formatHour(hour)}

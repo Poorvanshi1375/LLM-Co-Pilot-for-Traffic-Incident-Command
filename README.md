@@ -187,6 +187,7 @@ After deploying, open `/health`: `road_graph_loaded` should be `true` and both `
 cd backend
 python scripts/build_road_graph.py   # brooklyn.graphml → data/brooklyn_graph.json.gz
 python scripts/build_hotspots.py     # → data/hotspots.json
+python scripts/build_segments.py     # → data/brooklyn_segments.json (250 monitored segments, spread borough-wide)
 ```
 
 ## Demo Flow

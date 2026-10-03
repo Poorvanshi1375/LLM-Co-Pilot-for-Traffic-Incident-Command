@@ -43,6 +43,7 @@ CRITICAL RULES:
 - DO NOT dump raw data tables or tool output. Synthesize information into a helpful, human-readable response.
 - If you have SOP context, weave the relevant guidance naturally into your answer (e.g., "Based on our protocols, you'd want to..." rather than copying SOP paragraphs).
 - Keep answers concise — 2-4 sentences for simple questions, more for complex safety assessments.
+- Write plain text only: no Markdown (no **bold**, no # headings, no bullet symbols). Use short sentences, or simple numbered lines like "1. ..." when listing.
 - Be proactive: if data suggests something the officer should know, mention it.
 
 IMPORTANT: Maintain context across the conversation. Reference previous questions/answers when relevant.
@@ -266,7 +267,11 @@ Synthesize any reference knowledge into your own words — never copy it verbati
         for tag in ("[Confidence: HIGH]", "[Confidence: MEDIUM]", "[Confidence: LOW]"):
             response_text = response_text.replace(tag, "")
         response_text = re.sub(TOOL_PATTERN, '', response_text)
-        response_text = re.sub(r'\[TOOL_RESPONSE:[^\]]*\]', '', response_text).strip()
+        response_text = re.sub(r'\[TOOL_RESPONSE:[^\]]*\]', '', response_text)
+        # The chat panel and text-to-speech show plain text: drop leftover Markdown markers
+        response_text = re.sub(r'\*\*(.+?)\*\*', r'\1', response_text)
+        response_text = re.sub(r'^\s*[*•-]\s+', '- ', response_text, flags=re.MULTILINE)
+        response_text = re.sub(r'^#+\s*', '', response_text, flags=re.MULTILINE).strip()
 
         self._messages.append(ChatMessage(
             role="assistant",

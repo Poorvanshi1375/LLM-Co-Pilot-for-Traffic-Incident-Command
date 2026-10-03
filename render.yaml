@@ -23,11 +23,13 @@ services:
         sync: false
       - key: MAPBOX_TOKEN
         sync: false
-      # Security: operator token for settings, and the browser origins allowed to call the API
+      # Security: operator token for settings, and the browser origins allowed to call the API.
+      # This service is Blueprint-managed: a "value:" here overwrites the dashboard on every
+      # sync, so anything you set by hand is "sync: false" (set once in the dashboard).
       - key: ADMIN_TOKEN
-        generateValue: true
+        generateValue: true   # Render generates it once; copy it from the Environment page
       - key: ALLOWED_ORIGINS
-        value: http://localhost:3000
+        sync: false           # e.g. https://<your-vercel-production-domain>
       # Twitter/X stays off unless TWITTER_ENABLED is "true"
       - key: TWITTER_ENABLED
         value: "false"

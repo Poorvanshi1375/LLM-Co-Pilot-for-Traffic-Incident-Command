@@ -2,7 +2,7 @@
 "use client";
 
 import { useMemo, useCallback, useEffect, useState, useRef } from "react";
-import Map, { Source, Layer, Marker, NavigationControl } from "react-map-gl/mapbox";
+import Map, { Source, Layer, Marker, NavigationControl, type MapRef } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useTrafficStore } from "@/lib/store";
 import { speedToColor, severityColor } from "@/lib/utils";
@@ -63,6 +63,27 @@ export default function TrafficMap() {
 
   // Auto-compute routes when both points are set, or when incident/traffic changes
   const incidentId = incident?.street_name ?? null;
+  const mapRef = useRef<MapRef>(null);
+
+  // Bring a new incident into view (overview mode), then fit its diversion once computed
+  const incidentKey = incident?.incident_id ?? null;
+  useEffect(() => {
+    if (!incident || dashboardMode !== "overview") return;
+    mapRef.current?.flyTo({ center: [incident.lon, incident.lat], zoom: 14, duration: 1200 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when a different incident starts
+  }, [incidentKey, dashboardMode]);
+
+  const diversionCoords = agentOutput?.diversion?.route_coords;
+  useEffect(() => {
+    if (!diversionCoords?.length || !incident || dashboardMode !== "overview") return;
+    let minLon = incident.lon, maxLon = incident.lon, minLat = incident.lat, maxLat = incident.lat;
+    for (const [lon, lat] of diversionCoords) {
+      minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+      minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+    }
+    mapRef.current?.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 80, duration: 1200, maxZoom: 15 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refit only when the route changes
+  }, [diversionCoords]);
   useEffect(() => {
     if (!routeOrigin || !routeDestination || dashboardMode !== "route") return;
     const computeRoutes = async () => {
@@ -288,6 +309,7 @@ export default function TrafficMap() {
   return (
     <div className="w-full h-full relative">
       <Map
+        ref={mapRef}
         initialViewState={BROOKLYN_CENTER}
         style={{ width: "100%", height: "100%" }}
         mapStyle="mapbox://styles/mapbox/light-v11"
