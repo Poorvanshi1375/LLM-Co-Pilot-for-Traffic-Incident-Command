@@ -7,18 +7,30 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
+      # LLM keys (comma-separated pools are optional extras for failover)
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_API_KEYS
         sync: false
       - key: GOOGLE_AI_API_KEY
         sync: false
-      - key: GOOGLE_AI_API_KEY_2
-        sync: false
       - key: GOOGLE_AI_API_KEYS
+        sync: false
+      # Optional model overrides (defaults: openai/gpt-oss-120b, gemini-2.5-flash)
+      - key: GROQ_MODEL
+        sync: false
+      - key: GEMINI_MODEL
         sync: false
       - key: MAPBOX_TOKEN
         sync: false
+      # Security: operator token for settings, and the browser origins allowed to call the API
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: http://localhost:3000
+      # Twitter/X stays off unless TWITTER_ENABLED is "true"
+      - key: TWITTER_ENABLED
+        value: "false"
       - key: TWITTER_API_KEY
         sync: false
       - key: TWITTER_API_SECRET
@@ -27,5 +39,6 @@ services:
         sync: false
       - key: TWITTER_ACCESS_SECRET
         sync: false
-      - key: NYC_OPEN_DATA_TOKEN
-        sync: false
+      # Automatic incident detection from the feed (off for the public demo)
+      - key: AUTO_DETECT_INCIDENTS
+        value: "false"

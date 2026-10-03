@@ -8,9 +8,11 @@ import os
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
+import time
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -18,7 +20,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 from core.feed_engine import FeedEngine
 from core.risk_scorer import compute_risk_map, get_hotspots
-from core.graph import TrafficGraph
+from core.graph import TrafficGraph, AlreadyProcessingError
+from core import road_graph
+from core.llm_health import check_llms, get_status as get_llm_status
+from integrations.twitter_poster import twitter_enabled
 from pydantic import BaseModel
 from models.schemas import (
     ChatRequest, ChatResponse, Severity, IncidentDetection,
@@ -36,9 +41,51 @@ import io
 import csv
 
 
+APP_VERSION = "3.0.0"
+
+# Browser origins allowed to call the API (comma-separated), plus an optional
+# regex for Vercel preview URLs, e.g. https://llm-co-pilot-.*\.vercel\.app
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if o.strip()
+]
+ALLOWED_ORIGIN_REGEX = os.getenv(
+    "ALLOWED_ORIGIN_REGEX", r"https://llm-co-pilot-for-traffic-incident-command[a-z0-9-]*\.vercel\.app"
+) or None
+
+# Operator token for settings that affect everyone (auto-post, auto-detect)
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+TRIGGER_COOLDOWN_S = 30
+MAX_AUDIO_BYTES = 5 * 1024 * 1024
+_last_trigger_by_ip: dict[str, float] = {}
+
+
 class IncidentTriggerRequest(BaseModel):
     severity: str = "HIGH"
     segment_id: Optional[str] = None
+
+
+def _client_ip(request: Request) -> str:
+    """Client IP, honouring the proxy header Render sets."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _require_admin(token: Optional[str]):
+    if not ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="ADMIN_TOKEN is not configured on the server")
+    if token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+
+def _origin_allowed(origin: str) -> bool:
+    import re
+    if origin in ALLOWED_ORIGINS:
+        return True
+    return bool(ALLOWED_ORIGIN_REGEX and re.fullmatch(ALLOWED_ORIGIN_REGEX, origin))
+
 
 # Global instances
 feed_engine = FeedEngine()
@@ -91,26 +138,42 @@ async def lifespan(app: FastAPI):
     # Start feed in background
     feed_task = asyncio.create_task(feed_engine.run(interval=5.0))
 
+    # Warm the road graph and test LLM keys without blocking startup
+    def _load_road_graph():
+        road_graph.get_graph()
+        road_graph.attach_segments(feed_engine.get_segments())
+
+    async def _warm_up():
+        try:
+            await asyncio.to_thread(_load_road_graph)
+        except Exception as e:
+            print(f"Road graph load failed: {e}")
+
+    warm_tasks = [asyncio.create_task(_warm_up()), asyncio.create_task(check_llms())]
+
     yield
 
     # Cleanup
     feed_engine.stop()
     feed_task.cancel()
+    for t in warm_tasks:
+        t.cancel()
 
 
 app = FastAPI(
     title="TrafficMind API",
     description="LLM Co-Pilot for Traffic Incident Command",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
+    allow_credentials=False,  # the app sends no cookies
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Admin-Token"],
 )
 
 
@@ -119,7 +182,27 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "segments": len(feed_engine.get_segments()), "timestamp": datetime.now().isoformat()}
+    """Liveness plus readiness details. Always 200 so Render keeps the service up."""
+    llm = get_llm_status()
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "segments": len(feed_engine.get_segments()),
+        "road_graph_loaded": road_graph.is_loaded(),
+        "llm": {
+            "checked_at": llm["checked_at"],
+            "groq": llm["groq"],
+            "gemini": llm["gemini"],
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.post("/api/llm/check")
+async def recheck_llms(x_admin_token: Optional[str] = Header(default=None)):
+    """Re-test every LLM key now (operator only)."""
+    _require_admin(x_admin_token)
+    return await check_llms()
 
 
 @app.get("/api/state")
@@ -259,8 +342,10 @@ async def get_metrics():
         # Response time estimate
         base_metrics["incident_severity"] = incident.severity.value
         base_metrics["duration_estimate_min"] = incident.duration_estimate_min
+        # Illustrative only: 11 min is an assumed manual baseline, not a measurement
         base_metrics["manual_avg_min"] = 11.0
         base_metrics["time_saved_min"] = round(11.0 - (output.evaluation_metrics.get("response_latency_s", 5) / 60), 1) if output else 0
+        base_metrics["illustrative_fields"] = ["manual_avg_min", "time_saved_min"]
 
     return base_metrics
 
@@ -314,12 +399,14 @@ async def get_twin_data():
 
         with_action.append({**base, "speed": round(with_speed, 1), "free_flow_speed": seg.free_flow_speed})
 
+    # Illustrative: assumes intervention shortens the incident's impact by 30%
     time_saved = round(incident.duration_estimate_min * 0.3, 1) if incident else 0
 
     return {
         "no_action": no_action,
         "with_action": with_action,
         "time_saved_min": time_saved,
+        "time_saved_is_illustrative": True,
         "incident": incident.model_dump() if incident else None,
     }
 
@@ -331,31 +418,52 @@ _last_route_response = None
 
 @app.get("/api/geocode")
 async def geocode_search(q: str):
-    """Proxy geocoding to Mapbox — restricted to Brooklyn bbox."""
+    """Place search via Mapbox Search Box (landmarks + addresses), Brooklyn results only.
+
+    Geocoding v6 no longer returns POIs, so "Barclays Center" found nothing useful;
+    the Search Box API does, and tags each result's borough in context.locality.
+    """
     token = os.getenv("MAPBOX_TOKEN", "")
     if not token:
         raise HTTPException(status_code=500, detail="MAPBOX_TOKEN not configured")
-    bbox = "-74.05,40.57,-73.83,40.74"  # Brooklyn bounding box
-    url = "https://api.mapbox.com/search/geocode/v6/forward"
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params={
-            "q": q,
-            "access_token": token,
-            "bbox": bbox,
-            "limit": 5,
-            "language": "en",
-        })
-        resp.raise_for_status()
-        data = resp.json()
+    q = q.strip()[:200]
+    if len(q) < 2:
+        return {"suggestions": []}
+
+    params = {
+        "q": q,
+        "access_token": token,
+        "bbox": "-74.05,40.57,-73.83,40.74",  # box around Brooklyn (also covers lower Manhattan)
+        "proximity": "-73.9442,40.6782",       # bias toward central Brooklyn
+        "country": "us",
+        "language": "en",
+        "limit": 10,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://api.mapbox.com/search/searchbox/v1/forward", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Place search failed: {type(e).__name__}")
+
     suggestions = []
     for feat in data.get("features", []):
         props = feat.get("properties", {})
+        locality = (props.get("context", {}).get("locality") or {}).get("name", "")
+        full = props.get("full_address") or props.get("place_formatted") or ""
+        if locality != "Brooklyn" and "Brooklyn" not in full:
+            continue  # drop Manhattan/Queens hits inside the bounding box
+        name = props.get("name", "")
+        label = f"{name}, {full}" if full and not full.startswith(name) else (full or name)
         coords = feat.get("geometry", {}).get("coordinates", [0, 0])
         suggestions.append({
-            "place_name": props.get("full_address", props.get("name", "")),
+            "place_name": label.replace(", United States", ""),
             "lat": coords[1],
             "lon": coords[0],
         })
+        if len(suggestions) == 5:
+            break
     return {"suggestions": suggestions}
 
 
@@ -376,18 +484,21 @@ async def compute_routes_endpoint(body: RouteRequest):
     except Exception:
         pass
 
-    routes = await asyncio.to_thread(
-        compute_routes,
-        origin_lat=body.origin_lat,
-        origin_lon=body.origin_lon,
-        dest_lat=body.dest_lat,
-        dest_lon=body.dest_lon,
-        k=body.k,
-        feed_snapshot=snapshot,
-        risk_map=risk,
-        vehicle_type=body.vehicle_type,
-        weather_condition=weather_cond,
-    )
+    try:
+        routes = await asyncio.wait_for(asyncio.to_thread(
+            compute_routes,
+            origin_lat=body.origin_lat,
+            origin_lon=body.origin_lon,
+            dest_lat=body.dest_lat,
+            dest_lon=body.dest_lon,
+            k=max(1, min(body.k, 3)),
+            feed_snapshot=snapshot,
+            risk_map=risk,
+            vehicle_type=body.vehicle_type,
+            weather_condition=weather_cond,
+        ), timeout=60)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Route computation timed out")
 
     response = {
         "routes": routes,
@@ -442,23 +553,33 @@ async def export_routes_csv():
 
 
 @app.post("/api/trigger-incident")
-async def trigger_incident(body: IncidentTriggerRequest):
-    """Trigger a demo incident."""
-    sev = Severity(body.severity)
-    incident = await traffic_graph.trigger_incident(segment_id=body.segment_id, severity=sev)
+async def trigger_incident(body: IncidentTriggerRequest, request: Request):
+    """Trigger a demo incident (one per IP every 30 s), then wait up to 45 s for agents."""
+    try:
+        sev = Severity(body.severity)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Unknown severity '{body.severity}'")
+
+    ip = _client_ip(request)
+    now = time.time()
+    wait = TRIGGER_COOLDOWN_S - (now - _last_trigger_by_ip.get(ip, 0))
+    if wait > 0:
+        raise HTTPException(status_code=429, detail=f"Please wait {int(wait) + 1}s before triggering again")
+
+    try:
+        incident = await traffic_graph.trigger_incident(segment_id=body.segment_id, severity=sev)
+    except AlreadyProcessingError:
+        raise HTTPException(status_code=409, detail="Agents are already processing an incident")
     if not incident:
         raise HTTPException(status_code=400, detail="No segments available")
+    _last_trigger_by_ip[ip] = now
 
-    # Wait for agents to complete
-    for _ in range(30):
-        if not traffic_graph.get_state()["processing"]:
-            break
-        await asyncio.sleep(1)
-
+    finished = await traffic_graph.wait_for_pipeline(timeout=45)
     state = traffic_graph.get_state()
     return {
         "incident": incident.model_dump(),
         "agent_output": state["agent_output"].model_dump() if state.get("agent_output") else None,
+        "processing": not finished,
     }
 
 
@@ -474,21 +595,42 @@ async def get_settings():
     """Get current settings."""
     return {
         "auto_post": traffic_graph.get_auto_post() if traffic_graph else False,
+        "twitter_enabled": twitter_enabled(),
+        "auto_detect": traffic_graph.get_auto_detect() if traffic_graph else False,
+        "admin_configured": bool(ADMIN_TOKEN),
     }
 
 
 @app.post("/api/settings/auto-post")
-async def set_auto_post(body: dict):
-    """Toggle auto-post to Twitter/X."""
+async def set_auto_post(body: dict, x_admin_token: Optional[str] = Header(default=None)):
+    """Toggle auto-post to Twitter/X (operator only, and only if the server allows posting)."""
     enabled = bool(body.get("enabled", False))
+    if enabled:
+        if not twitter_enabled():
+            raise HTTPException(status_code=403, detail="Posting is disabled on this server (TWITTER_ENABLED is not true)")
+        _require_admin(x_admin_token)
     if traffic_graph:
         traffic_graph.set_auto_post(enabled)
     return {"auto_post": enabled}
 
 
+@app.post("/api/settings/auto-detect")
+async def set_auto_detect(body: dict, x_admin_token: Optional[str] = Header(default=None)):
+    """Toggle automatic incident detection (operator only)."""
+    _require_admin(x_admin_token)
+    enabled = bool(body.get("enabled", False))
+    if traffic_graph:
+        traffic_graph.set_auto_detect(enabled)
+    return {"auto_detect": enabled}
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """Send a message to the narrative agent."""
+    if not request.message.strip():
+        raise HTTPException(status_code=422, detail="Message is empty")
+    if len(request.message) > 2000:
+        raise HTTPException(status_code=413, detail="Message is longer than 2000 characters")
     narrative = traffic_graph.get_narrative_agent()
     response = await narrative.chat(request.message)
     return response.model_dump()
@@ -508,9 +650,11 @@ async def chat_voice(audio: UploadFile = File(...)):
     from io import BytesIO
     from integrations.speech import transcribe_audio
 
-    audio_bytes = await audio.read()
+    audio_bytes = await audio.read(MAX_AUDIO_BYTES + 1)
     if len(audio_bytes) == 0:
         raise HTTPException(status_code=400, detail="Empty audio file")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio is larger than 5 MB")
 
     stt = await transcribe_audio(audio_bytes, audio.filename or "audio.webm")
     if stt["status"] != "ok" or not stt["text"]:
@@ -522,6 +666,8 @@ async def chat_voice(audio: UploadFile = File(...)):
             "confidence": 0.0,
             "rag_sources": [],
             "audio_base64": "",
+            "source": "fallback",
+            "error": stt.get("reason", "")[:200],
         }
 
     transcript = stt["text"]
@@ -553,36 +699,40 @@ async def chat_voice(audio: UploadFile = File(...)):
 # ─── WebSocket ─────────────────────────────────────────────
 
 
+def _state_message() -> dict:
+    """Full current state, sent to each client when it connects."""
+    state = traffic_graph.get_state()
+    return {
+        "type": "state",
+        "incident": state["incident"].model_dump() if state.get("incident") else None,
+        "agent_output": state["agent_output"].model_dump() if state.get("agent_output") else None,
+        "processing": state.get("processing", False),
+        "timeline": [t.model_dump() for t in state.get("timeline", [])],
+    }
+
+
 @app.websocket("/ws/feed")
 async def websocket_feed(websocket: WebSocket):
-    """Real-time feed WebSocket."""
+    """Real-time feed WebSocket (server → client only; actions go through REST)."""
+    origin = websocket.headers.get("origin")
+    if origin and not _origin_allowed(origin):
+        await websocket.close(code=1008)  # policy violation
+        return
+
     await websocket.accept()
     connected_clients.append(websocket)
 
     try:
+        await websocket.send_text(json.dumps(_state_message()))
         while True:
-            # Keep connection alive; handle incoming messages
-            data = await websocket.receive_text()
-            msg = json.loads(data)
-
-            if msg.get("type") == "trigger_incident":
-                severity = msg.get("severity", "HIGH")
-                await traffic_graph.trigger_incident(severity=Severity(severity))
-            elif msg.get("type") == "resolve_incident":
-                await traffic_graph.resolve_incident()
-            elif msg.get("type") == "chat":
-                narrative = traffic_graph.get_narrative_agent()
-                response = await narrative.chat(msg.get("message", ""))
-                await websocket.send_text(json.dumps({
-                    "type": "chat_response",
-                    **response.model_dump(),
-                }))
+            # Keep the connection open; client messages are ignored
+            await websocket.receive_text()
 
     except WebSocketDisconnect:
-        if websocket in connected_clients:
-            connected_clients.remove(websocket)
+        pass
     except Exception as e:
         print(f"WebSocket error: {e}")
+    finally:
         if websocket in connected_clients:
             connected_clients.remove(websocket)
 

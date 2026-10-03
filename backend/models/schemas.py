@@ -64,6 +64,7 @@ class SignalRecommendation(BaseModel):
     confidence: float
     sensor_citation: str = ""
     upstream_distance_m: float = 0.0
+    source: str = "llm"  # "llm" or "fallback" (rule-based, LLM unavailable)
 
 
 class DiversionRoute(BaseModel):
@@ -75,12 +76,14 @@ class DiversionRoute(BaseModel):
     time_delta_min: float = 0.0
     confidence: float = 0.5
     why_safer: str = ""
+    source: str = "llm"
 
 
 class AlertDrafts(BaseModel):
     vms: list[str] = Field(default_factory=list, description="3 lines, each ≤20 chars")
     radio_script: str = ""
     tweet: str = Field(default="", max_length=280)
+    source: str = "llm"
 
 
 class DensityData(BaseModel):
@@ -107,6 +110,10 @@ class AgentOutput(BaseModel):
     rag_context: list[str] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
     evaluation_metrics: dict[str, float] = Field(default_factory=dict)
+    coherence_issues: list[str] = Field(default_factory=list)
+    sop_compliance: str = ""
+    # Per agent: {"source": "llm" | "fallback", "error": "..."}
+    agent_status: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class ChatMessage(BaseModel):
@@ -128,6 +135,8 @@ class ChatResponse(BaseModel):
     tool_calls: list[dict] = Field(default_factory=list)
     confidence: float = 0.0
     rag_sources: list[str] = Field(default_factory=list)
+    source: str = "llm"
+    error: str = ""
 
 
 class WeatherConditionSchema(BaseModel):

@@ -1,21 +1,19 @@
 """
-Route Finder — K-shortest paths on Brooklyn OSMnx road graph.
-MultiDiGraph → DiGraph conversion, priority routing for emergency vehicles,
-weather-aware edge weighting, and green/yellow/red route coloring.
+Route Finder — diverse shortest paths on the shared Brooklyn road graph.
+Priority routing for emergency vehicles, weather-aware edge weighting,
+live congestion from the feed, and routes coloured by their actual risk.
+
+Edge costs are computed per request through a weight function and a local
+memo; the shared graph is never written, so concurrent requests are safe.
 """
 from __future__ import annotations
 
-import os
-import heapq
-import networkx as nx
-import osmnx as ox
-import numpy as np
 from math import radians, sin, cos, sqrt, atan2
-from typing import Optional
-from datetime import datetime
+from typing import Callable, Optional
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-GRAPH_PATH = os.path.join(DATA_DIR, "brooklyn.graphml")
+import networkx as nx
+
+from core.road_graph import get_graph, nearest_node, nodes_within, street_name
 
 # Vehicle type speed/risk multipliers
 # Emergency vehicles: travel faster, accept more risk
@@ -26,9 +24,14 @@ VEHICLE_PROFILES = {
     "fire_brigade": {"speed_mult": 1.2, "risk_tolerance": 0.4},
 }
 
-# Cached graph (loaded once)
-_di_graph = None
-_multi_graph = None
+DIVERSITY_PENALTY = 5.0  # cost multiplier on edges already used by an earlier route
+
+# Route colour reflects the route's average risk score, not its rank
+RISK_COLORS = [
+    (0.35, "#10B981", "low"),       # green
+    (0.50, "#F59E0B", "moderate"),  # amber
+    (9.99, "#EF4444", "high"),      # red
+]
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -37,44 +40,6 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlon = radians(lon2 - lon1)
     a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
-
-
-def _load_graph():
-    """Load Brooklyn graph and convert MultiDiGraph → DiGraph (keeping min-weight edges)."""
-    global _di_graph, _multi_graph
-    if _di_graph is not None:
-        return _di_graph, _multi_graph
-
-    if not os.path.exists(GRAPH_PATH):
-        # brooklyn.graphml wasn't built at startup (segments.json cache short-circuits
-        # that step) — build and cache it now, on first actual use.
-        from core.feed_engine import _download_and_cache_graph
-        _download_and_cache_graph()
-
-    _multi_graph = ox.load_graphml(GRAPH_PATH)
-
-    # Convert MultiDiGraph → DiGraph: for each (u,v) keep the edge with minimum length
-    _di_graph = nx.DiGraph()
-    for node, data in _multi_graph.nodes(data=True):
-        _di_graph.add_node(node, **data)
-
-    for u, v, key, data in _multi_graph.edges(keys=True, data=True):
-        length = data.get("length", 100.0)
-        if _di_graph.has_edge(u, v):
-            if length < _di_graph[u][v].get("length", float("inf")):
-                _di_graph[u][v].update(data)
-        else:
-            _di_graph.add_edge(u, v, **data)
-
-    return _di_graph, _multi_graph
-
-
-def _get_street_name(data: dict) -> str:
-    """Extract street name from edge data."""
-    name = data.get("name", "")
-    if isinstance(name, list):
-        return name[0] if name else "Unknown"
-    return name or "Unknown"
 
 
 def _get_speed_limit(data: dict) -> float:
@@ -88,64 +53,150 @@ def _get_speed_limit(data: dict) -> float:
         return 25.0
 
 
-def _compute_edge_weight(
-    u_data: dict,
-    v_data: dict,
-    edge_data: dict,
-    feed_lookup: dict,
-    risk_lookup: dict,
-    vehicle_type: str = "normal",
-    weather_penalty_fn=None,
-) -> float:
-    """Compute composite edge weight considering distance, traffic, risk, weather, and vehicle type."""
-    length_m = edge_data.get("length", 100.0)
-    street_name = _get_street_name(edge_data)
-    speed_limit = _get_speed_limit(edge_data)
+def _as_dict(item) -> dict | None:
+    if hasattr(item, "model_dump"):
+        return item.model_dump()
+    return item if isinstance(item, dict) else None
 
-    profile = VEHICLE_PROFILES.get(vehicle_type, VEHICLE_PROFILES["normal"])
 
-    # Current speed from feed (if available), else use speed limit
-    u_lat = u_data.get("y", 0.0)
-    u_lon = u_data.get("x", 0.0)
-    mid_lat = (u_lat + v_data.get("y", 0.0)) / 2
-    mid_lon = (u_lon + v_data.get("x", 0.0)) / 2
+class EdgeCosts:
+    """Per-request edge metrics from live feed, risk and weather (memoised)."""
 
-    # Find closest segment speed from feed
-    current_speed = speed_limit
-    closest_dist = float("inf")
-    for seg_id, seg_data in feed_lookup.items():
-        d = abs(seg_data["lat"] - mid_lat) + abs(seg_data["lon"] - mid_lon)
-        if d < closest_dist:
-            closest_dist = d
-            current_speed = seg_data.get("speed", speed_limit)
+    def __init__(
+        self,
+        feed_snapshot: Optional[list] = None,
+        risk_map: Optional[list] = None,
+        vehicle_type: str = "normal",
+        weather_condition: Optional[str] = None,
+    ):
+        self.feed = {d["segment_id"]: d for d in map(_as_dict, feed_snapshot or []) if d}
+        self.risk = {d["segment_id"]: d for d in map(_as_dict, risk_map or []) if d}
+        self.profile = VEHICLE_PROFILES.get(vehicle_type, VEHICLE_PROFILES["normal"])
+        self.weather_fn: Callable[[str], float] | None = None
+        if weather_condition and weather_condition not in ("clear", "partly_cloudy"):
+            from core.weather_service import get_weather_penalty
+            self.weather_fn = lambda name: get_weather_penalty(name, weather_condition)
+        self._memo: dict[tuple, tuple] = {}
 
-    # Emergency vehicles travel faster
-    effective_speed = max(current_speed * profile["speed_mult"], 5.0)
+    def metrics(self, u, v, data: dict) -> tuple[float, float, float, float]:
+        """(minutes, risk, density, weather_penalty) for one edge."""
+        key = (u, v)
+        if key in self._memo:
+            return self._memo[key]
+        speed_limit = _get_speed_limit(data)
+        seg = self.feed.get(data.get("seg", ""))
+        # Apply the nearest segment's congestion ratio to this edge's own limit
+        if seg and seg.get("free_flow_speed", 0) > 0:
+            congestion = max(0.05, seg["speed"] / seg["free_flow_speed"])
+        else:
+            congestion = 1.0
+        speed = max(speed_limit * congestion * self.profile["speed_mult"], 3.0)
+        minutes = (data.get("length", 100.0) / 1609.34) / speed * 60.0
+        risk = self.risk.get(data.get("seg", ""), {}).get("score", 0.1)
+        density = seg.get("density", 0.0) if seg else 0.0
+        weather = self.weather_fn(street_name(data)) if self.weather_fn else 1.0
+        result = (minutes, risk, density, weather)
+        self._memo[key] = result
+        return result
 
-    # Travel time in minutes
-    travel_time = (length_m / 1609.34) / (effective_speed / 60.0)  # length in miles / speed in mph * 60
+    def cost(self, u, v, data: dict) -> float:
+        minutes, risk, _, weather = self.metrics(u, v, data)
+        return minutes * (1.0 + risk * self.profile["risk_tolerance"]) * weather
 
-    # Risk score from risk map
-    risk_score = 0.1
-    closest_risk_dist = float("inf")
-    for seg_id, r_data in risk_lookup.items():
-        d = abs(r_data["lat"] - mid_lat) + abs(r_data["lon"] - mid_lon)
-        if d < closest_risk_dist:
-            closest_risk_dist = d
-            risk_score = r_data.get("score", 0.1)
 
-    # Weather penalty
-    w_penalty = 1.0
-    if weather_penalty_fn is not None:
+def _cross_street(G: nx.DiGraph, node, street: str) -> str | None:
+    """Name of a different street meeting `street` at `node`, if any."""
+    for _, _, d in G.out_edges(node, data=True):
+        other = street_name(d)
+        if other not in (street, "Unknown"):
+            return other
+    for _, _, d in G.in_edges(node, data=True):
+        other = street_name(d)
+        if other not in (street, "Unknown"):
+            return other
+    return None
+
+
+def diverse_paths(
+    G: nx.DiGraph,
+    source,
+    target,
+    k: int,
+    costs: EdgeCosts,
+    blocked_nodes: set | None = None,
+) -> list[list]:
+    """Up to k paths, each penalising edges used by the ones before it."""
+    blocked = blocked_nodes or set()
+    penalty: dict[tuple, float] = {}
+
+    def weight(u, v, d):
+        if u in blocked or v in blocked:
+            return None  # hides the edge
+        return costs.cost(u, v, d) * penalty.get((u, v), 1.0)
+
+    paths = []
+    for _ in range(k):
         try:
-            w_penalty = weather_penalty_fn(street_name)
-        except Exception:
-            w_penalty = 1.0
+            path = nx.shortest_path(G, source, target, weight=weight)
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            break
+        if path in paths:
+            break
+        paths.append(path)
+        for u, v in zip(path, path[1:]):
+            penalty[(u, v)] = penalty.get((u, v), 1.0) * DIVERSITY_PENALTY
+    return paths
 
-    # Composite weight: travel_time * (1 + risk * risk_tolerance) * weather_penalty
-    weight = travel_time * (1.0 + risk_score * profile["risk_tolerance"]) * w_penalty
 
-    return weight
+def describe_path(G: nx.DiGraph, path: list, costs: EdgeCosts, vehicle_type: str = "normal") -> dict:
+    """Coordinates, streets and real metrics for one path."""
+    coords = [[G.nodes[path[0]]["x"], G.nodes[path[0]]["y"]]]
+    streets: list[str] = []
+    length_m = minutes = cost = risk_sum = density_sum = weather_sum = 0.0
+    preemptions = []
+    n = 0
+
+    for i, (u, v) in enumerate(zip(path, path[1:])):
+        data = G[u][v]
+        coords.extend(data.get("shape", []))
+        coords.append([G.nodes[v]["x"], G.nodes[v]["y"]])
+        name = street_name(data)
+        if name != "Unknown" and name not in streets:
+            streets.append(name)
+        e_min, e_risk, e_density, e_weather = costs.metrics(u, v, data)
+        length_m += data.get("length", 100.0)
+        minutes += e_min
+        cost += costs.cost(u, v, data)
+        risk_sum += e_risk
+        density_sum += e_density
+        weather_sum += e_weather
+        n += 1
+
+        if vehicle_type in ("ambulance", "police", "fire_brigade"):
+            highway = data.get("highway", "")
+            if isinstance(highway, list):
+                highway = highway[0] if highway else ""
+            cross = _cross_street(G, v, name)
+            if highway in ("primary", "secondary", "trunk") and cross and i % 3 == 0:
+                preemptions.append({
+                    "intersection": f"{name} & {cross}",
+                    "lat": G.nodes[v]["y"],
+                    "lon": G.nodes[v]["x"],
+                    "action": "Extend green phase",
+                })
+
+    n = max(n, 1)
+    return {
+        "coords": coords,
+        "street_names": streets,
+        "total_length_km": round(length_m / 1000.0, 2),
+        "total_travel_time_min": round(minutes, 1),
+        "composite_score": round(cost, 3),
+        "avg_accident_score": round(risk_sum / n, 3),
+        "avg_density": round(density_sum / n, 1),
+        "avg_weather_penalty": round(weather_sum / n, 2),
+        "signal_preemptions": preemptions,
+    }
 
 
 def find_routes(
@@ -160,267 +211,89 @@ def find_routes(
     weather_condition: Optional[str] = None,
 ) -> list[dict]:
     """
-    Find k-shortest routes from origin to destination on Brooklyn road graph.
-    Returns list of CandidateRoute dicts with coords, metrics, and coloring.
+    Find up to k diverse routes from origin to destination on the Brooklyn road graph.
+    Returns CandidateRoute dicts; route 0 has the lowest composite cost.
     """
-    G, MG = _load_graph()
+    G = get_graph()
+    costs = EdgeCosts(feed_snapshot, risk_map, vehicle_type, weather_condition)
 
-    # Build lookup dicts from live data
-    feed_lookup = {}
-    if feed_snapshot:
-        for seg in feed_snapshot:
-            if hasattr(seg, "model_dump"):
-                s = seg.model_dump()
-            elif isinstance(seg, dict):
-                s = seg
-            else:
-                continue
-            feed_lookup[s.get("segment_id", "")] = s
-
-    risk_lookup = {}
-    if risk_map:
-        for r in risk_map:
-            if hasattr(r, "model_dump"):
-                rd = r.model_dump()
-            elif isinstance(r, dict):
-                rd = r
-            else:
-                continue
-            risk_lookup[rd.get("segment_id", "")] = rd
-
-    # Weather penalty function
-    weather_penalty_fn = None
-    if weather_condition and weather_condition != "clear":
-        try:
-            from core.weather_service import get_weather_penalty
-            weather_penalty_fn = lambda name: get_weather_penalty(name, weather_condition)
-        except ImportError:
-            pass
-
-    # Snap to nearest graph nodes
-    orig_node = ox.nearest_nodes(MG, X=origin_lon, Y=origin_lat)
-    dest_node = ox.nearest_nodes(MG, X=dest_lon, Y=dest_lat)
-
+    orig_node = nearest_node(origin_lat, origin_lon)
+    dest_node = nearest_node(dest_lat, dest_lon)
     if orig_node == dest_node:
         return []
 
-    # Compute base edge weights
-    for u, v, data in G.edges(data=True):
-        u_data = G.nodes[u]
-        v_data = G.nodes[v]
-        w = _compute_edge_weight(u_data, v_data, data, feed_lookup, risk_lookup, vehicle_type, weather_penalty_fn)
-        data["_weight"] = w
-        data["_base_weight"] = w  # preserve original for penalty resets
-
-    # Find k diverse paths using penalty-based approach:
-    # After finding each shortest path, penalize its edges heavily so the next
-    # shortest path is forced onto different roads.
-    paths = []
-    DIVERSITY_PENALTY = 5.0  # multiplier applied to shared edges
-    for _ in range(k):
-        try:
-            path = nx.shortest_path(G, orig_node, dest_node, weight="_weight")
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            break
-        paths.append(path)
-        # Penalize edges used by this path so future paths avoid them
-        for j in range(len(path) - 1):
-            u, v = path[j], path[j + 1]
-            if G.has_edge(u, v):
-                G[u][v]["_weight"] *= DIVERSITY_PENALTY
-
-    # Restore original weights so cached graph isn't corrupted
-    for u, v, data in G.edges(data=True):
-        if "_base_weight" in data:
-            data["_weight"] = data["_base_weight"]
-
-    if not paths:
-        return []
-
-    # Build route responses
     routes = []
-    colors = ["#10B981", "#F59E0B", "#EF4444"]  # green, yellow, red
-    ranks = ["optimal", "moderate", "high"]
-
-    for idx, path in enumerate(paths):
-        coords = []
-        street_names = []
-        total_length_m = 0.0
-        total_time = 0.0
-        density_sum = 0.0
-        risk_sum = 0.0
-        weather_sum = 0.0
-        segment_count = 0
-        signal_preemptions = []
-
-        for i in range(len(path) - 1):
-            u, v = path[i], path[i + 1]
-            u_data = G.nodes[u]
-            v_data = G.nodes[v]
-            edge_data = G[u][v]
-
-            lat_u = u_data.get("y", 0.0)
-            lon_u = u_data.get("x", 0.0)
-            coords.append([lon_u, lat_u])
-
-            street = _get_street_name(edge_data)
-            if street not in street_names:
-                street_names.append(street)
-
-            length_m = edge_data.get("length", 100.0)
-            total_length_m += length_m
-
-            weight = edge_data.get("_weight", 1.0)
-            total_time += weight
-
-            # Collect metrics
-            mid_lat = (lat_u + v_data.get("y", 0.0)) / 2
-            mid_lon = (lon_u + v_data.get("x", 0.0)) / 2
-
-            # Find density from feed
-            seg_density = 0.5
-            closest_d = float("inf")
-            for sid, sd in feed_lookup.items():
-                d = abs(sd["lat"] - mid_lat) + abs(sd["lon"] - mid_lon)
-                if d < closest_d:
-                    closest_d = d
-                    seg_density = sd.get("density", 0.5)
-            density_sum += seg_density
-
-            # Risk
-            seg_risk = 0.1
-            closest_r = float("inf")
-            for sid, rd in risk_lookup.items():
-                d = abs(rd["lat"] - mid_lat) + abs(rd["lon"] - mid_lon)
-                if d < closest_r:
-                    closest_r = d
-                    seg_risk = rd.get("score", 0.1)
-            risk_sum += seg_risk
-
-            # Weather penalty
-            if weather_penalty_fn:
-                try:
-                    weather_sum += weather_penalty_fn(street)
-                except Exception:
-                    weather_sum += 1.0
-            else:
-                weather_sum += 1.0
-
-            segment_count += 1
-
-            # Signal preemptions for emergency vehicles
-            if vehicle_type in ("ambulance", "police", "fire_brigade"):
-                highway = edge_data.get("highway", "")
-                if isinstance(highway, list):
-                    highway = highway[0] if highway else ""
-                if highway in ("primary", "secondary", "trunk") and i % 3 == 0:
-                    signal_preemptions.append({
-                        "intersection": f"{street} node {v}",
-                        "lat": v_data.get("y", 0.0),
-                        "lon": v_data.get("x", 0.0),
-                        "action": "Extend green phase",
-                    })
-
-        # Add final node
-        last_node = path[-1]
-        last_data = G.nodes[last_node]
-        coords.append([last_data.get("x", 0.0), last_data.get("y", 0.0)])
-
-        avg_density = density_sum / max(segment_count, 1)
-        avg_risk = risk_sum / max(segment_count, 1)
-        avg_weather = weather_sum / max(segment_count, 1)
-
-        composite_score = total_time
-
-        route = {
+    for idx, path in enumerate(diverse_paths(G, orig_node, dest_node, k, costs)):
+        info = describe_path(G, path, costs, vehicle_type)
+        color, level = next((c, lvl) for limit, c, lvl in RISK_COLORS if info["avg_accident_score"] < limit)
+        routes.append({
             "route_index": idx,
-            "rank": ranks[min(idx, len(ranks) - 1)],
-            "color": colors[min(idx, len(colors) - 1)],
-            "street_names": street_names[:10],  # top 10 streets
-            "coords": coords,
-            "total_length_km": round(total_length_m / 1000.0, 2),
-            "total_travel_time_min": round(total_time, 2),
-            "avg_density": round(avg_density, 3),
-            "avg_accident_score": round(avg_risk, 3),
-            "avg_weather_penalty": round(avg_weather, 2),
-            "composite_score": round(composite_score, 3),
+            "rank": "optimal" if idx == 0 else "alternative",
+            "risk_level": level,
+            "color": color,
+            **info,
+            "street_names": info["street_names"][:10],
             "is_optimal": idx == 0,
-            "signal_preemptions": signal_preemptions if vehicle_type != "normal" else [],
-        }
-        routes.append(route)
-
+        })
     return routes
 
 
-def _k_shortest_paths(G, source, target, k, weight="_weight"):
-    """Yen's k-shortest simple loopless paths algorithm."""
-    try:
-        shortest = nx.shortest_path(G, source, target, weight=weight)
-    except nx.NetworkXNoPath:
-        return
+def find_diversion(
+    incident_lat: float,
+    incident_lon: float,
+    incident_street: str,
+    feed_snapshot: Optional[list] = None,
+    risk_map: Optional[list] = None,
+    weather_condition: Optional[str] = None,
+    block_radius_km: float = 0.2,
+    ring_km: tuple[float, float] = (0.4, 0.9),
+) -> dict | None:
+    """Real road path around a blocked incident zone.
 
-    yield shortest
-    if k == 1:
-        return
+    Picks entry and exit nodes on the incident street (or, if it has none,
+    on any street) 400–900 m away on opposite sides, blocks every node within
+    200 m of the incident, and routes between them.
+    """
+    G = get_graph()
+    costs = EdgeCosts(feed_snapshot, risk_map, "normal", weather_condition)
+    blocked = set(nodes_within(incident_lat, incident_lon, block_radius_km))
 
-    A = [shortest]
-    B = []  # candidates (heap)
+    ring = set(nodes_within(incident_lat, incident_lon, ring_km[1])) - set(
+        nodes_within(incident_lat, incident_lon, ring_km[0])
+    )
+    on_street = {
+        n for n in ring
+        if any(street_name(d) == incident_street for _, _, d in G.edges(n, data=True))
+        or any(street_name(d) == incident_street for _, _, d in G.in_edges(n, data=True))
+    }
+    candidates = on_street if len(on_street) >= 2 else ring
+    if len(candidates) < 2:
+        return None
 
-    for i in range(1, k):
-        for j in range(len(A[i - 1]) - 1):
-            spur_node = A[i - 1][j]
-            root_path = A[i - 1][:j + 1]
+    def pos(n):
+        return G.nodes[n]["y"], G.nodes[n]["x"]
 
-            removed_edges = []
-            for path in A:
-                if len(path) > j and path[:j + 1] == root_path:
-                    u, v = path[j], path[j + 1]
-                    if G.has_edge(u, v):
-                        edge_data = G[u][v].copy()
-                        G.remove_edge(u, v)
-                        removed_edges.append((u, v, edge_data))
+    # Entry = any candidate; exit = the candidate farthest from it (opposite side)
+    nodes = sorted(candidates)
+    entry = nodes[0]
+    far = max(nodes, key=lambda n: _haversine_km(*pos(entry), *pos(n)))
+    entry = max(nodes, key=lambda n: _haversine_km(*pos(far), *pos(n)))
 
-            # Remove root_path nodes (except spur_node) from graph temporarily
-            removed_nodes = []
-            for node in root_path[:-1]:
-                if node != spur_node and node in G:
-                    node_edges = list(G.edges(node, data=True)) + list(G.in_edges(node, data=True))
-                    removed_nodes.append((node, dict(G.nodes[node]), node_edges))
-                    G.remove_node(node)
-
-            try:
-                spur_path = nx.shortest_path(G, spur_node, target, weight=weight)
-                total_path = root_path[:-1] + spur_path
-                total_weight = sum(
-                    G[total_path[n]][total_path[n + 1]].get(weight, 1.0)
-                    for n in range(len(total_path) - 1)
-                    if G.has_edge(total_path[n], total_path[n + 1])
-                )
-
-                if total_path not in A:
-                    heapq.heappush(B, (total_weight, total_path))
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                pass
-
-            # Restore removed nodes and edges
-            for node, node_data, node_edges in removed_nodes:
-                G.add_node(node, **node_data)
-                for u2, v2, ed in node_edges:
-                    if not G.has_edge(u2, v2):
-                        G.add_edge(u2, v2, **ed)
-
-            for u, v, ed in removed_edges:
-                if not G.has_edge(u, v):
-                    G.add_edge(u, v, **ed)
-
-        if not B:
-            break
-
-        while B:
-            cost, path = heapq.heappop(B)
-            if path not in A:
-                A.append(path)
-                yield path
-                break
-        else:
-            break
+    for source, target in ((entry, far), (far, entry)):
+        paths = diverse_paths(G, source, target, 1, costs, blocked_nodes=blocked)
+        if paths:
+            info = describe_path(G, paths[0], costs)
+            # Baseline: the direct trip between the same points under normal
+            # (free-flow, speed-limit) conditions, i.e. what drivers lose overall
+            normal = EdgeCosts()
+            direct = diverse_paths(G, source, target, 1, normal)
+            direct_min = describe_path(G, direct[0], normal)["total_travel_time_min"] if direct else info["total_travel_time_min"]
+            blocked_streets = sorted({
+                street_name(d) for n in blocked for _, _, d in G.edges(n, data=True)
+            } - {"Unknown"})
+            return {
+                **info,
+                "extra_minutes": round(max(0.0, info["total_travel_time_min"] - direct_min), 1),
+                "blocked_streets": blocked_streets[:5],
+            }
+    return None

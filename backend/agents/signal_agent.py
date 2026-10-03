@@ -1,19 +1,17 @@
 """
 Signal Agent — Recommends signal re-timing for upstream intersections.
-Uses Groq (Llama 3.3 70B) for sub-second inference.
+Uses Groq (gpt-oss-120b by default) for fast inference.
 600m pre-emptive upstream window.
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-from groq import Groq
+
 from models.schemas import (
     SegmentSpeed, RiskEntry, IncidentDetection, SignalRecommendation
 )
 from core.risk_scorer import _haversine
-from core.key_manager import get_groq_key
+from core.llm import groq_chat, extract_json
 
 SYSTEM_PROMPT = """You are a traffic signal timing expert for Brooklyn, New York.
 You receive real-time traffic data and must recommend signal phase changes for intersections
@@ -27,7 +25,7 @@ CRITICAL RULES:
 - Provide confidence (0.0-1.0) for each recommendation
 - Include one-line sensor data citation for each recommendation
 
-Return valid JSON array of objects with these fields:
+Return a JSON object {"recommendations": [...]} whose items have these fields:
 {
   "intersection_name": "Street A & Street B",
   "current_phase": "NS: 45s green, EW: 30s green",
@@ -91,24 +89,19 @@ UPSTREAM SEGMENTS (within 600m):
 
 Generate signal re-timing recommendations for 2-4 key intersections near these segments.
 Focus on pre-emptive queue prevention — adjust signals BEFORE the queue reaches the incident.
-Return ONLY a valid JSON array."""
+Return ONLY the JSON object."""
 
     try:
-        client = Groq(api_key=get_groq_key())
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="llama-3.3-70b-versatile",
-            messages=[
+        content = await groq_chat(
+            [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
             max_tokens=1500,
-            response_format={"type": "json_object"},
+            temperature=0.3,
+            json_mode=True,
         )
-
-        content = response.choices[0].message.content
-        parsed = json.loads(content)
+        parsed = extract_json(content)
 
         # Handle both direct array and wrapped object
         if isinstance(parsed, dict):
@@ -129,15 +122,22 @@ Return ONLY a valid JSON array."""
                 upstream_distance_m=item.get("upstream_distance_m", 0),
             ))
 
+        if not recommendations:
+            raise ValueError("model returned no recommendations")
         return recommendations
 
     except Exception as e:
         print(f"Signal agent error: {e}")
-        # Fallback: generate basic recommendations from data
+        # Fallback: rule-based recommendations from cross streets near the incident
+        cross_streets, seen = [], {incident.street_name}
+        for s in upstream:
+            if s["street_name"] not in seen:
+                seen.add(s["street_name"])
+                cross_streets.append(s)
         recs = []
-        for seg in upstream[:3]:
+        for seg in cross_streets[:3]:
             recs.append(SignalRecommendation(
-                intersection_name=f"{seg['street_name']} & {incident.street_name}",
+                intersection_name=f"{seg['street_name']} near {incident.street_name}",
                 current_phase="Standard cycle",
                 recommended_phase=f"Extend green away from incident ({seg['street_name']})",
                 phase_duration_s=45,
@@ -145,5 +145,6 @@ Return ONLY a valid JSON array."""
                 confidence=0.6,
                 sensor_citation=f"Speed sensor: {seg['speed']:.0f}mph on {seg['street_name']}, {seg['distance_m']}m from incident",
                 upstream_distance_m=seg["distance_m"],
+                source="fallback",
             ))
         return recs

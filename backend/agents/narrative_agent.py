@@ -1,28 +1,22 @@
 """
 Narrative Agent — Conversational TAO loop for officer Q&A.
 TAO = Thought → Action (tool call) → Observation → Answer.
-Uses Gemini 2.0 Flash with multi-turn memory.
+Uses Gemini Flash with multi-turn memory.
 """
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from models.schemas import (
     SegmentSpeed, RiskEntry, IncidentDetection, AgentOutput,
     ChatMessage, ChatResponse,
 )
 
-from core.key_manager import get_gemini_key
+from core.llm import gemini_generate
 from core.risk_scorer import compute_risk_map
 from rag.retriever import retrieve_sops
 
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+TOOL_PATTERN = r'\[TOOL(?:_CALL)?:\s*(\w+)\(([^)]*)\)\]'
 
 
 SYSTEM_PROMPT = """You are TrafficMind, an AI co-pilot assisting traffic control officers in Brooklyn, New York.
@@ -156,7 +150,7 @@ class NarrativeAgent:
         self._messages.append(ChatMessage(
             role="user",
             content=user_message,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
         ))
 
         # RAG: retrieve relevant SOP documents
@@ -212,24 +206,13 @@ class NarrativeAgent:
             role_label = "OFFICER" if msg.role == "user" else "TRAFFICMIND"
             history_text += f"\n{role_label}: {msg.content}"
 
-        if not GEMINI_AVAILABLE:
-            # Fallback: direct tool-based response
-            return await self._fallback_response(user_message)
+        voice_instruction = """
 
-        # Try up to 3 different API keys on rate-limit errors
-        last_error = None
-        for _attempt in range(3):
-            try:
-                genai.configure(api_key=get_gemini_key())
-                model = genai.GenerativeModel("gemini-2.5-flash")
-
-                voice_instruction = """
-
-⚠️ VOICE MODE — This answer will be spoken aloud via text-to-speech.
+VOICE MODE — This answer will be spoken aloud via text-to-speech.
 Be EXTREMELY concise: 1-2 short sentences max. Give only the key data point or action.
 No greetings, no filler, no "Let me check" — just the essential answer.""" if voice else ""
 
-                prompt = f"""{SYSTEM_PROMPT}
+        prompt = f"""{SYSTEM_PROMPT}
 
 CURRENT SITUATION:
 {context}
@@ -240,115 +223,78 @@ CONVERSATION HISTORY:
 Respond to the officer's latest question naturally and conversationally. Use tools if needed by including [TOOL: tool_name("arg")] in your thinking.
 Synthesize any reference knowledge into your own words — never copy it verbatim. Then provide the final answer."""
 
-                response = await asyncio.to_thread(
-                    model.generate_content,
-                    prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.4,
-                        max_output_tokens=256 if voice else 1024,
-                    ),
+        try:
+            response_text = await gemini_generate(
+                prompt, max_tokens=256 if voice else 1024, temperature=0.4,
+            )
+            thinking = ""
+            tool_calls = []
+
+            # TAO loop: execute any tool calls the model asked for, then re-query
+            matches = re.findall(TOOL_PATTERN, response_text)
+            for tool_name, tool_args in matches:
+                # Strip keyword arg syntax like street_name='...'
+                clean_args = re.sub(r'^\w+=', '', tool_args).strip().strip("'\"")
+                observation = self._execute_tool(tool_name, clean_args)
+                tool_calls.append({"tool": tool_name, "args": clean_args, "result": observation})
+
+            if tool_calls:
+                observations = "\n".join(f"[{tc['tool']}] → {tc['result']}" for tc in tool_calls)
+                follow_up = (
+                    "Provide a clear, data-backed answer to the officer. No further tool calls needed. "
+                    "Do NOT include [TOOL_CALL:...] markers in your answer."
+                )
+                thinking = response_text
+                response_text = await gemini_generate(
+                    f"{prompt}\n\nTOOL OBSERVATIONS:\n{observations}\n\n{follow_up}",
+                    max_tokens=256 if voice else 800,
+                    temperature=0.3,
                 )
 
-                response_text = response.text
-                thinking = ""
-                tool_calls = []
+        except Exception as e:
+            print(f"Narrative agent error: {e}")
+            return self._fallback_response(user_message, rag_sources, error=str(e)[:200])
 
-                # Check if response contains tool calls
-                if "[TOOL:" in response_text or "[TOOL_CALL:" in response_text:
-                    import re
-                    tool_pattern = r'\[TOOL(?:_CALL)?:\s*(\w+)\(([^)]*)\)\]'
-                    matches = re.findall(tool_pattern, response_text)
+        # Determine confidence from response
+        confidence = 0.8
+        if "[Confidence: HIGH]" in response_text or "high confidence" in response_text.lower():
+            confidence = 0.9
+        elif "[Confidence: LOW]" in response_text or "low confidence" in response_text.lower():
+            confidence = 0.5
 
-                    for tool_name, tool_args in matches:
-                        # Strip keyword arg syntax like street_name='...'
-                        clean_args = re.sub(r'^\w+=', '', tool_args).strip().strip("'\"")
-                        observation = self._execute_tool(tool_name, clean_args)
-                        tool_calls.append({
-                            "tool": tool_name,
-                            "args": clean_args,
-                            "result": observation,
-                        })
+        # Clean response
+        for tag in ("[Confidence: HIGH]", "[Confidence: MEDIUM]", "[Confidence: LOW]"):
+            response_text = response_text.replace(tag, "")
+        response_text = re.sub(TOOL_PATTERN, '', response_text)
+        response_text = re.sub(r'\[TOOL_RESPONSE:[^\]]*\]', '', response_text).strip()
 
-                    # If we found tool calls, re-query with observations
-                    if tool_calls:
-                        observations = "\n".join([f"[{tc['tool']}] → {tc['result']}" for tc in tool_calls])
-                        follow_up = f"""Based on these tool observations:
-{observations}
+        self._messages.append(ChatMessage(
+            role="assistant",
+            content=response_text,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            tool_calls=tool_calls,
+            thinking=thinking,
+        ))
 
-Provide a clear, data-backed answer to the officer. No further tool calls needed. Do NOT include [TOOL_CALL:...] markers in your answer."""
+        return ChatResponse(
+            response=response_text,
+            thinking=thinking,
+            tool_calls=tool_calls,
+            confidence=confidence,
+            rag_sources=rag_sources,
+        )
 
-                        response2 = await asyncio.to_thread(
-                            model.generate_content,
-                            f"{prompt}\n\nTOOL OBSERVATIONS:\n{observations}\n\n{follow_up}",
-                            generation_config=genai.GenerationConfig(
-                                temperature=0.3,
-                                max_output_tokens=800,
-                            ),
-                        )
-                        thinking = response_text
-                        response_text = response2.text
-
-                # Determine confidence from response
-                confidence = 0.8
-                if "[Confidence: HIGH]" in response_text or "high confidence" in response_text.lower():
-                    confidence = 0.9
-                elif "[Confidence: LOW]" in response_text or "low confidence" in response_text.lower():
-                    confidence = 0.5
-
-                # Clean response
-                import re as _re
-                response_text = response_text.replace("[Confidence: HIGH]", "").replace("[Confidence: MEDIUM]", "").replace("[Confidence: LOW]", "")
-                # Strip any remaining tool call markers from final text
-                response_text = _re.sub(r'\[TOOL(?:_CALL)?:\s*\w+\([^)]*\)\]', '', response_text)
-                response_text = _re.sub(r'\[TOOL_RESPONSE:[^\]]*\]', '', response_text)
-                response_text = response_text.strip()
-
-                self._messages.append(ChatMessage(
-                    role="assistant",
-                    content=response_text,
-                    timestamp=datetime.now().isoformat(),
-                    tool_calls=tool_calls,
-                    thinking=thinking,
-                ))
-
-                return ChatResponse(
-                    response=response_text,
-                    thinking=thinking,
-                    tool_calls=tool_calls,
-                    confidence=confidence,
-                    rag_sources=rag_sources,
-                )
-
-            except Exception as e:
-                last_error = e
-                print(f"Narrative agent error (attempt {_attempt+1}): {e}")
-                continue  # Try next API key
-
-        # All retries exhausted
-        print(f"All Gemini attempts failed, using fallback")
-        return await self._fallback_response(user_message)
-
-    async def _fallback_response(self, question: str) -> ChatResponse:
-        """Generate response using available data, with LLM layer if possible."""
+    def _fallback_response(self, question: str, rag_sources: list[str], error: str = "") -> ChatResponse:
+        """Rule-based answer from live tool data when the LLM is unavailable."""
         q = question.lower()
         tool_calls = []
 
-        # RAG: retrieve relevant SOP documents for fallback too
-        rag_docs = retrieve_sops(question, top_k=2)
-        rag_sources: list[str] = []
-        if rag_docs:
-            for doc in rag_docs:
-                if doc.startswith("[") and "]" in doc:
-                    rag_sources.append(doc[1:doc.index("]")])
-
-        # Gather relevant data via tools (uses live data now)
         live_snapshot = self._get_live_snapshot()
         if "safe" in q or "open" in q or "lane" in q:
             if self._incident:
-                obs = self._execute_tool("get_speed", self._incident.street_name)
-                tool_calls.append({"tool": "get_speed", "args": self._incident.street_name, "result": obs})
-                risk_obs = self._execute_tool("get_risk_score", self._incident.street_name)
-                tool_calls.append({"tool": "get_risk_score", "args": self._incident.street_name, "result": risk_obs})
+                for tool in ("get_speed", "get_risk_score"):
+                    obs = self._execute_tool(tool, self._incident.street_name)
+                    tool_calls.append({"tool": tool, "args": self._incident.street_name, "result": obs})
         elif "speed" in q:
             for seg in live_snapshot[:5]:
                 obs = self._execute_tool("get_speed", seg.street_name)
@@ -357,85 +303,44 @@ Provide a clear, data-backed answer to the officer. No further tool calls needed
             obs = self._execute_tool("check_diversion_status", "")
             tool_calls.append({"tool": "check_diversion_status", "args": "", "result": obs})
         elif "risk" in q or "danger" in q:
-            for r in self._risk_map[:5]:
+            top = sorted(self._get_live_risk_map(), key=lambda r: r.score, reverse=True)[:5]
+            for r in top:
                 obs = self._execute_tool("get_risk_score", r.street_name)
                 tool_calls.append({"tool": "get_risk_score", "args": r.street_name, "result": obs})
 
-        # Build a mini-prompt with all gathered data and try Gemini
-        data_text = "\n".join(f"- {tc['result']}" for tc in tool_calls) if tool_calls else "No specific tool data gathered."
-        rag_text = "\n---\n".join(rag_docs) if rag_docs else "No reference documents available."
-
-        context_parts = []
-        if self._incident:
-            context_parts.append(
-                f"Active incident: {self._incident.severity.value} on {self._incident.street_name} — {self._incident.description}"
+        if tool_calls:
+            response = "The AI assistant is unavailable, so here is the raw sensor data: " + "; ".join(
+                tc["result"] for tc in tool_calls
             )
-        if self._agent_output and self._agent_output.final_summary:
-            context_parts.append(f"Situation summary: {self._agent_output.final_summary}")
-
-        fallback_prompt = f"""You are TrafficMind, a friendly and knowledgeable AI traffic co-pilot for Brooklyn officers.
-Answer the officer's question naturally and conversationally. Use the data and reference knowledge below to inform your answer, but write in your OWN words — never copy reference text verbatim.
-
-OFFICER'S QUESTION: {question}
-
-SENSOR DATA:
-{data_text}
-
-SITUATION CONTEXT:
-{chr(10).join(context_parts) if context_parts else "No active incident."}
-
-REFERENCE KNOWLEDGE (paraphrase, do not quote):
-{rag_text}
-
-Write a helpful, concise, conversational response. 2-4 sentences."""
-
-        # Try Gemini for natural language generation (retry with different keys)
-        if GEMINI_AVAILABLE:
-            for _fb_attempt in range(3):
-                try:
-                    genai.configure(api_key=get_gemini_key())
-                    model = genai.GenerativeModel("gemini-2.5-flash")
-                    resp = await asyncio.to_thread(
-                        model.generate_content,
-                        fallback_prompt,
-                        generation_config=genai.GenerationConfig(temperature=0.5, max_output_tokens=800),
-                    )
-                    response = resp.text.replace("[Confidence: HIGH]", "").replace("[Confidence: MEDIUM]", "").replace("[Confidence: LOW]", "").strip()
-                    confidence = 0.75
-                    break
-                except Exception as fb_err:
-                    print(f"Fallback Gemini attempt {_fb_attempt+1}: {fb_err}")
-                    continue
-            else:
-                # All retries failed — true fallback
-                if tool_calls:
-                    response = "Here's what I found: " + "; ".join(tc["result"] for tc in tool_calls)
-                else:
-                    response = "I can help with speed data, risk scores, diversion status, and safety assessments. What would you like to know?"
-                confidence = 0.5
         else:
-            if tool_calls:
-                response = "Here's what I found: " + "; ".join(tc["result"] for tc in tool_calls)
-            else:
-                response = "I can help with speed data, risk scores, diversion status, and safety assessments. What would you like to know?"
-            confidence = 0.5
+            response = (
+                "The AI assistant is unavailable right now. I can still report speeds, risk scores "
+                "and diversion status — try asking about one of those."
+            )
 
         self._messages.append(ChatMessage(
             role="assistant",
             content=response,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             tool_calls=tool_calls,
         ))
 
         return ChatResponse(
             response=response,
             tool_calls=tool_calls,
-            confidence=confidence,
+            confidence=0.5,
             rag_sources=rag_sources,
+            source="fallback",
+            error=error,
         )
 
     def get_messages(self) -> list[ChatMessage]:
         return self._messages
 
     def clear(self):
+        """Forget the conversation and the resolved incident's context."""
         self._messages.clear()
+        self._incident = None
+        self._agent_output = None
+        self._snapshot = []
+        self._risk_map = []

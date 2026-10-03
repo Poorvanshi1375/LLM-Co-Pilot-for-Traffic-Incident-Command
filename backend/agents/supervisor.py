@@ -4,23 +4,15 @@ Uses Gemini 2.0 Flash for deep cross-agent reasoning.
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from models.schemas import (
     IncidentDetection, SignalRecommendation, DiversionRoute,
     AlertDrafts, DensityData, AgentOutput, TimelineEntry,
 )
 
-from core.key_manager import get_gemini_key
-
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+from core.llm import gemini_generate, extract_json
 
 
 SYSTEM_PROMPT = """You are the supervisor of a multi-agent traffic incident management system for Brooklyn, New York.
@@ -58,32 +50,26 @@ async def run_supervisor(
 
     start_time = time.time()
 
-    # Build timeline
-    timeline = [
-        TimelineEntry(
-            timestamp=incident.timestamp,
-            event=f"Incident detected on {incident.street_name} ({incident.severity.value})",
-            category="detection",
-        ),
-    ]
+    # Build timeline (detection itself is logged by the graph when it happens)
+    timeline: list[TimelineEntry] = []
 
     if signals:
         timeline.append(TimelineEntry(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event=f"Signal re-timing recommended for {len(signals)} intersections",
             category="signal",
         ))
 
     if diversion:
         timeline.append(TimelineEntry(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event=f"Diversion route computed via {' → '.join(diversion.route_street_names[:3])}",
             category="routing",
         ))
 
     if alerts:
         timeline.append(TimelineEntry(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event="Public alerts drafted (VMS, Radio, Tweet)",
             category="alert",
         ))
@@ -128,7 +114,7 @@ async def run_supervisor(
     )
     if diversion and diversion.risk_delta_pct >= 0:
         routing_conf = min(0.95, 0.6 + diversion.risk_delta_pct / 200.0)
-    alerts_conf = 0.85 if alerts else 0.5
+    alerts_conf = 0.85 if alerts and alerts.source == "llm" else 0.5
     overall_conf = round((signal_conf + routing_conf + alerts_conf) / 3, 2)
     confidence_scores = {
         "signal": round(signal_conf, 2),
@@ -137,31 +123,40 @@ async def run_supervisor(
         "overall": overall_conf,
     }
     cascade_risk = 0.0
+    coherence_issues: list[str] = []
+    sop_compliance = ""
+    supervisor_status = {"source": "llm", "error": ""}
 
-    if GEMINI_AVAILABLE:
+    try:
+        text = await gemini_generate(
+            f"AGENT OUTPUTS:\n{json.dumps(agent_data, indent=2)}\n\nReturn ONLY valid JSON.",
+            system=SYSTEM_PROMPT,
+            max_tokens=800,
+            temperature=0.3,
+            json_mode=True,
+        )
+        parsed = extract_json(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("supervisor response was not a JSON object")
+        final_summary = str(parsed.get("final_summary", ""))
+        llm_scores = parsed.get("confidence_scores", {})
+        if isinstance(llm_scores, dict):
+            for k, v in llm_scores.items():
+                try:
+                    confidence_scores[str(k)] = round(min(1.0, max(0.0, float(v))), 2)
+                except (TypeError, ValueError):
+                    pass
         try:
-            genai.configure(api_key=get_gemini_key())
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            response = await asyncio.to_thread(
-                model.generate_content,
-                f"{SYSTEM_PROMPT}\n\nAGENT OUTPUTS:\n{json.dumps(agent_data, indent=2)}\n\nReturn ONLY valid JSON.",
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=800,
-                ),
-            )
+            cascade_risk = min(1.0, max(0.0, float(parsed.get("cascade_risk", 0.0))))
+        except (TypeError, ValueError):
+            cascade_risk = 0.0
+        issues = parsed.get("coherence_issues", [])
+        coherence_issues = [str(i) for i in issues] if isinstance(issues, list) else []
+        sop_compliance = str(parsed.get("sop_compliance", ""))
 
-            text = response.text
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                parsed = json.loads(text[start:end])
-                final_summary = parsed.get("final_summary", "")
-                confidence_scores = parsed.get("confidence_scores", confidence_scores)
-                cascade_risk = parsed.get("cascade_risk", 0.0)
-
-        except Exception as e:
-            print(f"Supervisor Gemini error: {e}")
+    except Exception as e:
+        print(f"Supervisor Gemini error: {e}")
+        supervisor_status = {"source": "fallback", "error": str(e)[:200]}
 
     if not final_summary:
         severity_action = {
@@ -181,7 +176,7 @@ async def run_supervisor(
     elapsed = round(time.time() - start_time, 2)
 
     timeline.append(TimelineEntry(
-        timestamp=datetime.now().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
         event=f"Supervisor analysis complete ({elapsed}s)",
         category="supervisor",
     ))
@@ -196,10 +191,13 @@ async def run_supervisor(
         cascade_risk=cascade_risk,
         rag_context=rag_context or [],
         timeline=timeline,
+        coherence_issues=coherence_issues,
+        sop_compliance=sop_compliance,
+        agent_status={"supervisor": supervisor_status},
         evaluation_metrics={
             "response_latency_s": elapsed,
             "agents_invoked": 4,
             "signals_generated": len(signals) if signals else 0,
-            "alert_compliance": 1.0,  # All format constraints met
+            "alert_compliance": 1.0,  # VMS/tweet limits are enforced in the alert agent
         },
     )

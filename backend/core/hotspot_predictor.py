@@ -2,20 +2,20 @@
 Hotspot Predictor — DBSCAN clustering on weighted synthetic accident records.
 Uses Brooklyn OSMnx graph edges to generate realistic accident distributions,
 then clusters them with DBSCAN (haversine metric) to identify predicted hotspot zones.
+The result is deterministic (seeded), so it is precomputed into data/hotspots.json
+by scripts/build_hotspots.py and served from that file at runtime.
 """
 from __future__ import annotations
 
 import os
-import time
+import json
 import random
 import numpy as np
-import osmnx as ox
-from sklearn.cluster import DBSCAN
 from math import radians, sin, cos, sqrt, atan2
 from typing import Optional
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-GRAPH_PATH = os.path.join(DATA_DIR, "brooklyn.graphml")
+HOTSPOTS_PATH = os.path.join(DATA_DIR, "hotspots.json")
 
 # Known high-incident intersections (from risk_scorer.py) — used for weighting
 KNOWN_HOTSPOT_COORDS = [
@@ -38,9 +38,8 @@ ROAD_TYPE_WEIGHTS = {
     "residential": 1, "unclassified": 1, "living_street": 1,
 }
 
-# Cache
-_cache: dict = {"clusters": None, "timestamp": 0.0}
-CACHE_TTL_S = 3600  # 1 hour
+# Clusters never change at runtime — loaded or computed once
+_cache: dict = {"clusters": None}
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -117,16 +116,28 @@ def _generate_synthetic_accidents(G, n: int = 500) -> np.ndarray:
 
 
 def predict_hotspots() -> list[dict]:
-    """Run DBSCAN clustering on synthetic accidents, return predicted hotspot clusters."""
-    now = time.time()
-    if _cache["clusters"] is not None and (now - _cache["timestamp"]) < CACHE_TTL_S:
+    """Return predicted hotspot clusters (precomputed file, else computed once)."""
+    if _cache["clusters"] is not None:
         return _cache["clusters"]
 
-    # Load graph
-    if not os.path.exists(GRAPH_PATH):
-        from core.feed_engine import _download_and_cache_graph
-        _download_and_cache_graph()
-    G = ox.load_graphml(GRAPH_PATH)
+    if os.path.exists(HOTSPOTS_PATH):
+        with open(HOTSPOTS_PATH, encoding="utf-8") as f:
+            _cache["clusters"] = json.load(f)
+        return _cache["clusters"]
+
+    _cache["clusters"] = compute_hotspots()
+    return _cache["clusters"]
+
+
+def compute_hotspots() -> list[dict]:
+    """Run DBSCAN clustering on synthetic accidents over the road graph.
+
+    Build-time only (scikit-learn is in requirements-dev.txt); the server
+    serves the precomputed data/hotspots.json.
+    """
+    from sklearn.cluster import DBSCAN
+    from core.road_graph import get_graph
+    G = get_graph()
 
     # Generate synthetic accidents
     accidents = _generate_synthetic_accidents(G, n=500)
@@ -177,6 +188,4 @@ def predict_hotspots() -> list[dict]:
     # Sort by risk score descending
     clusters.sort(key=lambda c: c["risk_score"], reverse=True)
 
-    _cache["clusters"] = clusters
-    _cache["timestamp"] = now
     return clusters

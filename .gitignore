@@ -17,10 +17,14 @@ node_modules/
 .next/
 out/
 
-# Data
-backend/data/*.graphml
+# Data (brooklyn.graphml is committed on purpose: scripts/build_road_graph.py rebuilds the runtime graph from it)
 backend/data/*.csv
 !backend/data/.gitkeep
+
+# OSMnx download cache and stray graph copies from running at the repo root
+cache/
+backend/cache/
+/brooklyn.graphml
 
 # OS
 .DS_Store

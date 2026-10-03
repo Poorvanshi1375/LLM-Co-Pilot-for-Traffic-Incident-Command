@@ -1,6 +1,8 @@
 """
 Twitter/X Poster — auto-post incident alerts as tweets.
 Gracefully skips if credentials are not configured.
+Posting is OFF unless the server sets TWITTER_ENABLED=true, so a public demo
+can never tweet from the account just because someone flipped the UI toggle.
 """
 from __future__ import annotations
 
@@ -9,6 +11,11 @@ from typing import Optional
 
 _client = None
 _initialized = False
+
+
+def twitter_enabled() -> bool:
+    """Server-side kill switch for all posting."""
+    return os.getenv("TWITTER_ENABLED", "false").strip().lower() == "true"
 
 
 def _get_client():
@@ -47,6 +54,8 @@ def _get_client():
 
 def post_tweet(text: str) -> dict:
     """Post a tweet. Returns status dict with tweet_id/url or skip reason."""
+    if not twitter_enabled():
+        return {"status": "skipped", "reason": "posting disabled on this server (TWITTER_ENABLED is not true)"}
     client = _get_client()
     if client is None:
         return {"status": "skipped", "reason": "Twitter credentials not configured"}

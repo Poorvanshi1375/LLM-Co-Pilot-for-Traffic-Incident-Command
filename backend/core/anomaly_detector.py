@@ -1,12 +1,14 @@
 """
 Anomaly Detector — Threshold-based detection + Bayesian severity forecast.
-Triggers when segment drops >40% below rolling baseline OR risk_score > 0.75.
+Triggers when segment drops >40% below rolling baseline OR risk_score > 0.75,
+held on the same segment for PERSIST_TICKS consecutive ticks, and never during
+the first WARMUP_TICKS ticks while baselines settle.
 No LLM calls — pure statistical detection.
 """
 from __future__ import annotations
 
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from models.schemas import SegmentSpeed, RiskEntry, IncidentDetection, Severity
 
 # Bayesian conditional probability table for duration estimation
@@ -19,6 +21,10 @@ DURATION_TABLE = {
 }
 
 
+WARMUP_TICKS = 12   # 1 minute at 5 s ticks
+PERSIST_TICKS = 3   # condition must hold this many consecutive ticks
+
+
 class AnomalyDetector:
     """Detects traffic incidents from speed feed and risk data."""
 
@@ -26,9 +32,17 @@ class AnomalyDetector:
         self._baselines: dict[str, float] = {}  # segment_id → rolling avg speed
         self._baseline_alpha = 0.1  # Exponential moving average factor
         self._incident_count = 0
+        self._ticks_seen = 0
+        self._streaks: dict[str, int] = {}  # segment_id → consecutive anomalous ticks
+
+    def reset_warmup(self):
+        """Restart the warm-up window (e.g. when auto-detection is switched on)."""
+        self._ticks_seen = 0
+        self._streaks.clear()
 
     def update_baselines(self, snapshot: list[SegmentSpeed]):
         """Update rolling baselines with new speed data."""
+        self._ticks_seen += 1
         for seg in snapshot:
             if seg.segment_id in self._baselines:
                 self._baselines[seg.segment_id] = (
@@ -51,6 +65,8 @@ class AnomalyDetector:
         Returns IncidentDetection if triggered, None otherwise.
         """
         risk_by_id = {r.segment_id: r for r in risk_map}
+        warming_up = self._ticks_seen <= WARMUP_TICKS
+        anomalous: set[str] = set()
 
         worst_segment = None
         worst_score = 0.0
@@ -64,22 +80,28 @@ class AnomalyDetector:
             if baseline > 0:
                 drop_pct = (baseline - seg.speed) / baseline
                 if drop_pct > 0.40:
+                    anomalous.add(seg.segment_id)
                     score = drop_pct + (risk.score if risk else 0)
-                    if score > worst_score:
+                    if score > worst_score and self._streaks.get(seg.segment_id, 0) + 1 >= PERSIST_TICKS:
                         worst_score = score
                         worst_segment = seg
                         worst_reason = f"Speed dropped {drop_pct*100:.0f}% below baseline ({baseline:.0f} → {seg.speed:.0f} mph)"
 
             # Condition 2: Risk score > 0.75
             if risk and risk.score > 0.75:
+                anomalous.add(seg.segment_id)
                 score = risk.score + 0.5
-                if score > worst_score:
+                if score > worst_score and self._streaks.get(seg.segment_id, 0) + 1 >= PERSIST_TICKS:
                     worst_score = score
                     worst_segment = seg
                     worst_reason = f"Risk score {risk.score:.2f} exceeds threshold (historical + speed + time-of-day)"
 
-        if worst_segment is None:
+        # Update streaks: increment segments anomalous this tick, drop the rest
+        self._streaks = {sid: self._streaks.get(sid, 0) + 1 for sid in anomalous}
+
+        if worst_segment is None or warming_up:
             return None
+        self._streaks.clear()
 
         # Determine severity
         severity = self._classify_severity(worst_score, worst_segment)
@@ -97,7 +119,7 @@ class AnomalyDetector:
             duration_estimate_min=duration,
             lat=worst_segment.lat,
             lon=worst_segment.lon,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             description=worst_reason,
         )
 
@@ -144,6 +166,6 @@ class AnomalyDetector:
             duration_estimate_min=duration,
             lat=segment.lat,
             lon=segment.lon,
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             description=descriptions[severity].format(street=segment.street_name),
         )

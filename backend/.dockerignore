@@ -4,5 +4,9 @@ __pycache__/
 venv/
 .env
 cache/
-data/*.graphml
 .git/
+# Runtime uses data/brooklyn_graph.json.gz; the graphml is only for rebuilding it
+data/*.graphml
+scripts/
+tests/
+requirements-dev.txt

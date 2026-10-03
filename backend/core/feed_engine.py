@@ -10,7 +10,6 @@ import time
 import random
 import threading
 import numpy as np
-import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -35,8 +34,12 @@ MORNING_PEAK = (8.0, 10.5)   # 08:00 – 10:30
 EVENING_PEAK = (17.5, 20.5)  # 17:30 – 20:30
 
 
-def _time_of_day_factor(hour: float) -> float:
-    """Returns speed degradation factor (0.4 = worst, 1.0 = free flow)."""
+def _time_of_day_factor(hour: float, jitter: float = 0.5) -> float:
+    """Returns speed degradation factor (0.4 = worst, 1.0 = free flow).
+
+    jitter (0–1) varies off-peak levels; the feed draws it once per hour so the
+    whole network does not jump up and down every tick.
+    """
     if MORNING_PEAK[0] <= hour <= MORNING_PEAK[1]:
         peak_center = (MORNING_PEAK[0] + MORNING_PEAK[1]) / 2
         dist = abs(hour - peak_center) / ((MORNING_PEAK[1] - MORNING_PEAK[0]) / 2)
@@ -46,11 +49,11 @@ def _time_of_day_factor(hour: float) -> float:
         dist = abs(hour - peak_center) / ((EVENING_PEAK[1] - EVENING_PEAK[0]) / 2)
         return 0.35 + 0.3 * dist
     elif 6.0 <= hour < 8.0 or 10.5 < hour < 17.5:
-        return 0.75 + 0.15 * random.random()
+        return 0.75 + 0.15 * jitter
     elif 20.5 < hour <= 23.0:
-        return 0.8 + 0.15 * random.random()
+        return 0.8 + 0.15 * jitter
     else:
-        return 0.95 + 0.05 * random.random()
+        return 0.95 + 0.05 * jitter
 
 
 def _download_and_cache_graph():
@@ -204,6 +207,8 @@ class FeedEngine:
         self._decay_duration: float = 900.0  # 15 minutes in seconds
         now = datetime.now(NYC_TZ)
         self._simulated_hour: float = now.hour + now.minute / 60.0
+        self._jitter_hour: int = -1
+        self._jitter: float = 0.5
 
     def initialize(self):
         """Load or generate segment data."""
@@ -261,7 +266,10 @@ class FeedEngine:
         now = datetime.now(NYC_TZ)
         self._simulated_hour = now.hour + now.minute / 60.0
 
-        tod_factor = _time_of_day_factor(self._simulated_hour)
+        if now.hour != self._jitter_hour:
+            self._jitter_hour = now.hour
+            self._jitter = random.random()
+        tod_factor = _time_of_day_factor(self._simulated_hour, self._jitter)
         speeds = []
 
         for seg in self._segments:

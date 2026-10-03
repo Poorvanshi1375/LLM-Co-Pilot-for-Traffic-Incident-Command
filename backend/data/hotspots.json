@@ -1,0 +1,398 @@
+[
+ {
+  "cluster_id": 3,
+  "center_lat": 40.647296,
+  "center_lon": -73.972846,
+  "accident_count": 13,
+  "severity_score": 1.54,
+  "risk_score": 20.0,
+  "radius_m": 438.4
+ },
+ {
+  "cluster_id": 1,
+  "center_lat": 40.698402,
+  "center_lon": -73.937206,
+  "accident_count": 8,
+  "severity_score": 1.62,
+  "risk_score": 13.0,
+  "radius_m": 374.9
+ },
+ {
+  "cluster_id": 12,
+  "center_lat": 40.688312,
+  "center_lon": -73.91948,
+  "accident_count": 5,
+  "severity_score": 2.0,
+  "risk_score": 10.0,
+  "radius_m": 260.8
+ },
+ {
+  "cluster_id": 30,
+  "center_lat": 40.673227,
+  "center_lon": -73.969662,
+  "accident_count": 7,
+  "severity_score": 1.43,
+  "risk_score": 10.0,
+  "radius_m": 178.7
+ },
+ {
+  "cluster_id": 2,
+  "center_lat": 40.623335,
+  "center_lon": -73.935947,
+  "accident_count": 6,
+  "severity_score": 1.5,
+  "risk_score": 9.0,
+  "radius_m": 333.3
+ },
+ {
+  "cluster_id": 4,
+  "center_lat": 40.720568,
+  "center_lon": -73.943921,
+  "accident_count": 5,
+  "severity_score": 1.8,
+  "risk_score": 9.0,
+  "radius_m": 316.6
+ },
+ {
+  "cluster_id": 6,
+  "center_lat": 40.670997,
+  "center_lon": -73.99011,
+  "accident_count": 4,
+  "severity_score": 2.25,
+  "risk_score": 9.0,
+  "radius_m": 217.6
+ },
+ {
+  "cluster_id": 21,
+  "center_lat": 40.609059,
+  "center_lon": -73.969926,
+  "accident_count": 6,
+  "severity_score": 1.5,
+  "risk_score": 9.0,
+  "radius_m": 289.8
+ },
+ {
+  "cluster_id": 0,
+  "center_lat": 40.66979,
+  "center_lon": -73.903339,
+  "accident_count": 5,
+  "severity_score": 1.6,
+  "risk_score": 8.0,
+  "radius_m": 242.4
+ },
+ {
+  "cluster_id": 5,
+  "center_lat": 40.696411,
+  "center_lon": -73.987198,
+  "accident_count": 4,
+  "severity_score": 2.0,
+  "risk_score": 8.0,
+  "radius_m": 180.8
+ },
+ {
+  "cluster_id": 11,
+  "center_lat": 40.668586,
+  "center_lon": -73.920803,
+  "accident_count": 5,
+  "severity_score": 1.6,
+  "risk_score": 8.0,
+  "radius_m": 195.6
+ },
+ {
+  "cluster_id": 20,
+  "center_lat": 40.691064,
+  "center_lon": -73.999246,
+  "accident_count": 5,
+  "severity_score": 1.6,
+  "risk_score": 8.0,
+  "radius_m": 106.6
+ },
+ {
+  "cluster_id": 34,
+  "center_lat": 40.645244,
+  "center_lon": -73.959109,
+  "accident_count": 4,
+  "severity_score": 2.0,
+  "risk_score": 8.0,
+  "radius_m": 190.3
+ },
+ {
+  "cluster_id": 7,
+  "center_lat": 40.66664,
+  "center_lon": -73.881901,
+  "accident_count": 4,
+  "severity_score": 1.75,
+  "risk_score": 7.0,
+  "radius_m": 215.1
+ },
+ {
+  "cluster_id": 8,
+  "center_lat": 40.683275,
+  "center_lon": -73.978818,
+  "accident_count": 5,
+  "severity_score": 1.4,
+  "risk_score": 7.0,
+  "radius_m": 330.2
+ },
+ {
+  "cluster_id": 19,
+  "center_lat": 40.679398,
+  "center_lon": -74.002899,
+  "accident_count": 4,
+  "severity_score": 1.75,
+  "risk_score": 7.0,
+  "radius_m": 225.0
+ },
+ {
+  "cluster_id": 33,
+  "center_lat": 40.652997,
+  "center_lon": -73.889019,
+  "accident_count": 5,
+  "severity_score": 1.4,
+  "risk_score": 7.0,
+  "radius_m": 344.0
+ },
+ {
+  "cluster_id": 10,
+  "center_lat": 40.703443,
+  "center_lon": -73.946441,
+  "accident_count": 3,
+  "severity_score": 2.0,
+  "risk_score": 6.0,
+  "radius_m": 163.0
+ },
+ {
+  "cluster_id": 25,
+  "center_lat": 40.714201,
+  "center_lon": -73.932247,
+  "accident_count": 3,
+  "severity_score": 2.0,
+  "risk_score": 6.0,
+  "radius_m": 50.0
+ },
+ {
+  "cluster_id": 28,
+  "center_lat": 40.66582,
+  "center_lon": -73.872778,
+  "accident_count": 4,
+  "severity_score": 1.5,
+  "risk_score": 6.0,
+  "radius_m": 189.3
+ },
+ {
+  "cluster_id": 29,
+  "center_lat": 40.675484,
+  "center_lon": -73.865866,
+  "accident_count": 4,
+  "severity_score": 1.5,
+  "risk_score": 6.0,
+  "radius_m": 195.7
+ },
+ {
+  "cluster_id": 35,
+  "center_lat": 40.588508,
+  "center_lon": -73.971212,
+  "accident_count": 4,
+  "severity_score": 1.5,
+  "risk_score": 6.0,
+  "radius_m": 296.0
+ },
+ {
+  "cluster_id": 43,
+  "center_lat": 40.656784,
+  "center_lon": -73.97599,
+  "accident_count": 3,
+  "severity_score": 2.0,
+  "risk_score": 6.0,
+  "radius_m": 173.3
+ },
+ {
+  "cluster_id": 13,
+  "center_lat": 40.674799,
+  "center_lon": -73.903734,
+  "accident_count": 3,
+  "severity_score": 1.67,
+  "risk_score": 5.0,
+  "radius_m": 183.5
+ },
+ {
+  "cluster_id": 16,
+  "center_lat": 40.660793,
+  "center_lon": -73.920037,
+  "accident_count": 3,
+  "severity_score": 1.67,
+  "risk_score": 5.0,
+  "radius_m": 99.9
+ },
+ {
+  "cluster_id": 24,
+  "center_lat": 40.637734,
+  "center_lon": -73.896213,
+  "accident_count": 3,
+  "severity_score": 1.67,
+  "risk_score": 5.0,
+  "radius_m": 200.7
+ },
+ {
+  "cluster_id": 36,
+  "center_lat": 40.675841,
+  "center_lon": -73.896585,
+  "accident_count": 4,
+  "severity_score": 1.25,
+  "risk_score": 5.0,
+  "radius_m": 176.0
+ },
+ {
+  "cluster_id": 37,
+  "center_lat": 40.652615,
+  "center_lon": -74.009235,
+  "accident_count": 3,
+  "severity_score": 1.67,
+  "risk_score": 5.0,
+  "radius_m": 130.4
+ },
+ {
+  "cluster_id": 14,
+  "center_lat": 40.614358,
+  "center_lon": -74.031232,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 160.8
+ },
+ {
+  "cluster_id": 15,
+  "center_lat": 40.68701,
+  "center_lon": -73.978555,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 116.0
+ },
+ {
+  "cluster_id": 17,
+  "center_lat": 40.693435,
+  "center_lon": -73.96887,
+  "accident_count": 4,
+  "severity_score": 1.0,
+  "risk_score": 4.0,
+  "radius_m": 245.8
+ },
+ {
+  "cluster_id": 18,
+  "center_lat": 40.672404,
+  "center_lon": -73.982748,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 203.6
+ },
+ {
+  "cluster_id": 27,
+  "center_lat": 40.587247,
+  "center_lon": -73.944516,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 137.8
+ },
+ {
+  "cluster_id": 31,
+  "center_lat": 40.704437,
+  "center_lon": -73.929933,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 164.5
+ },
+ {
+  "cluster_id": 32,
+  "center_lat": 40.661218,
+  "center_lon": -73.986719,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 160.1
+ },
+ {
+  "cluster_id": 38,
+  "center_lat": 40.603937,
+  "center_lon": -74.017591,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 141.1
+ },
+ {
+  "cluster_id": 39,
+  "center_lat": 40.651847,
+  "center_lon": -73.960863,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 157.5
+ },
+ {
+  "cluster_id": 40,
+  "center_lat": 40.600843,
+  "center_lon": -73.962225,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 166.5
+ },
+ {
+  "cluster_id": 41,
+  "center_lat": 40.702045,
+  "center_lon": -73.988306,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 197.5
+ },
+ {
+  "cluster_id": 42,
+  "center_lat": 40.607796,
+  "center_lon": -74.001149,
+  "accident_count": 3,
+  "severity_score": 1.33,
+  "risk_score": 4.0,
+  "radius_m": 164.1
+ },
+ {
+  "cluster_id": 9,
+  "center_lat": 40.620263,
+  "center_lon": -73.999084,
+  "accident_count": 3,
+  "severity_score": 1.0,
+  "risk_score": 3.0,
+  "radius_m": 133.8
+ },
+ {
+  "cluster_id": 22,
+  "center_lat": 40.654345,
+  "center_lon": -73.912594,
+  "accident_count": 3,
+  "severity_score": 1.0,
+  "risk_score": 3.0,
+  "radius_m": 102.3
+ },
+ {
+  "cluster_id": 23,
+  "center_lat": 40.691025,
+  "center_lon": -73.987842,
+  "accident_count": 3,
+  "severity_score": 1.0,
+  "risk_score": 3.0,
+  "radius_m": 138.3
+ },
+ {
+  "cluster_id": 26,
+  "center_lat": 40.693787,
+  "center_lon": -73.97787,
+  "accident_count": 3,
+  "severity_score": 1.0,
+  "risk_score": 3.0,
+  "radius_m": 182.3
+ }
+]

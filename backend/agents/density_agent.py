@@ -1,23 +1,14 @@
 """
 Density Agent — Vehicle density estimation.
 Simulated mode: Fundamental flow equation (density = flow / speed).
-Vision mode: Gemini 2.0 Flash for camera frame analysis.
+Vision mode: Gemini Flash for camera frame analysis.
 """
 from __future__ import annotations
 
-import asyncio
-import json
-import os
 import base64
 from models.schemas import SegmentSpeed, DensityData
 
-from core.key_manager import get_gemini_key
-
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+from core.llm import gemini_generate, extract_json, image_part
 
 
 def compute_density_simulated(snapshot: list[SegmentSpeed]) -> DensityData:
@@ -58,16 +49,7 @@ def compute_density_simulated(snapshot: list[SegmentSpeed]) -> DensityData:
 
 async def analyze_camera_frame(image_base64: str) -> DensityData:
     """Use Gemini Vision to analyze a camera frame for vehicle density."""
-    if not GEMINI_AVAILABLE:
-        return DensityData(
-            congestion_level="UNKNOWN",
-            vision_analysis="Gemini Vision not available",
-        )
-
     try:
-        genai.configure(api_key=get_gemini_key())
-        model = genai.GenerativeModel("gemini-2.5-flash")
-
         prompt = """Analyze this traffic camera image. Provide:
 1. Estimated number of vehicles visible
 2. Congestion level (FREE_FLOW / LIGHT / MODERATE / HEAVY / GRIDLOCK)
@@ -82,24 +64,13 @@ Return JSON:
   "lane_occupancy_pct": 65
 }"""
 
-        import PIL.Image
-        import io
-        image_data = base64.b64decode(image_base64)
-        image = PIL.Image.open(io.BytesIO(image_data))
-
-        response = await asyncio.to_thread(model.generate_content, [prompt, image])
-        text = response.text
-
-        # Try to parse JSON from response
+        image = image_part(base64.b64decode(image_base64))
+        text = await gemini_generate([prompt, image], max_tokens=400, temperature=0.2, json_mode=True)
         try:
-            # Find JSON in response
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                parsed = json.loads(text[start:end])
-            else:
-                parsed = {}
-        except json.JSONDecodeError:
+            parsed = extract_json(text)
+        except Exception:
+            parsed = {}
+        if not isinstance(parsed, dict):
             parsed = {}
 
         return DensityData(

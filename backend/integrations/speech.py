@@ -1,16 +1,17 @@
 """
 Speech-to-text via Groq Whisper API.
-Uses the existing key rotation infrastructure.
+Uses the shared key pool with failover.
 """
 from __future__ import annotations
 
 import asyncio
-import tempfile
+import io
 import os
-from typing import Optional
 
-from groq import Groq
-from core.key_manager import get_groq_key
+from core.key_manager import groq_pool
+from core.llm import call_with_failover, groq_client
+
+WHISPER_MODEL = "whisper-large-v3-turbo"
 
 
 async def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> dict:
@@ -18,28 +19,19 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "audio.webm") -> 
     Transcribe audio bytes using Groq Whisper.
     Returns {"text": "...", "status": "ok"} or {"text": "", "status": "error", "reason": "..."}.
     """
+    name = filename if os.path.splitext(filename)[1] else f"{filename}.webm"
+
+    def fn(key: str) -> str:
+        transcription = groq_client(key).audio.transcriptions.create(
+            file=(name, io.BytesIO(audio_bytes)),
+            model=WHISPER_MODEL,
+            language="en",
+            response_format="text",
+        )
+        return str(transcription).strip()
+
     try:
-        client = Groq(api_key=get_groq_key())
-
-        # Determine file extension for Groq
-        ext = os.path.splitext(filename)[1] or ".webm"
-        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        try:
-            with open(tmp_path, "rb") as audio_file:
-                transcription = await asyncio.to_thread(
-                    client.audio.transcriptions.create,
-                    file=(filename, audio_file),
-                    model="whisper-large-v3-turbo",
-                    language="en",
-                    response_format="text",
-                )
-            text = str(transcription).strip()
-            return {"text": text, "status": "ok"}
-        finally:
-            os.unlink(tmp_path)
-
+        text = await asyncio.to_thread(call_with_failover, groq_pool(), "groq", fn)
+        return {"text": text, "status": "ok"}
     except Exception as e:
         return {"text": "", "status": "error", "reason": str(e)}

@@ -1,0 +1,8 @@
+# Tests
+pytest>=8,<10
+httpx>=0.27,<1
+
+# Offline data builds (scripts/build_road_graph.py, scripts/build_hotspots.py)
+osmnx>=2.0,<3
+scikit-learn>=1.4,<2
+psutil>=5.9

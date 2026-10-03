@@ -1,16 +1,12 @@
 """
 Alert Agent — Generates three-format public alerts.
 VMS (3 lines ≤20 chars), 15s radio script, 280-char tweet.
-Uses Groq (Llama 3.3 70B).
+Uses Groq (gpt-oss-120b by default).
 """
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-from groq import Groq
 from models.schemas import IncidentDetection, DiversionRoute, AlertDrafts
-from core.key_manager import get_groq_key
+from core.llm import groq_chat, extract_json
 
 SYSTEM_PROMPT = """You are a public information officer for Brooklyn, New York traffic management.
 Generate THREE types of alerts for a traffic incident:
@@ -55,25 +51,22 @@ Estimated duration: {incident.duration_estimate_min} minutes
 Generate all three alert formats. Return ONLY valid JSON."""
 
     try:
-        client = Groq(api_key=get_groq_key())
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model="llama-3.3-70b-versatile",
-            messages=[
+        content = await groq_chat(
+            [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.4,
             max_tokens=600,
-            response_format={"type": "json_object"},
+            temperature=0.4,
+            json_mode=True,
         )
-
-        content = response.choices[0].message.content
-        parsed = json.loads(content)
+        parsed = extract_json(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("alerts were not a JSON object")
 
         vms = parsed.get("vms", [])
         # Enforce constraints
-        vms = [line[:20].upper() for line in vms[:3]]
+        vms = [str(line)[:20].upper() for line in vms[:3]]
         while len(vms) < 3:
             vms.append("USE ALT ROUTE")
 
@@ -89,11 +82,11 @@ Generate all three alert formats. Return ONLY valid JSON."""
     except Exception as e:
         print(f"Alert agent error: {e}")
         # Fallback alerts
-        street_short = incident.street_name[:16]
+        street_short = incident.street_name[:20].upper()
         return AlertDrafts(
             vms=[
-                f"INCIDENT AHEAD",
-                f"{street_short}",
+                "INCIDENT AHEAD",
+                street_short,
                 "USE ALT ROUTE",
             ],
             radio_script=f"Brooklyn traffic advisory. A {incident.severity.value.lower()} severity incident "
@@ -101,4 +94,5 @@ Generate all three alert formats. Return ONLY valid JSON."""
                         f"Expect delays of approximately {incident.duration_estimate_min:.0f} minutes.",
             tweet=f"⚠️ Traffic Alert: {incident.severity.value} incident on {incident.street_name}, Brooklyn. "
                   f"Expect delays ~{incident.duration_estimate_min:.0f}min. Seek alternate routes. #BrooklynTraffic",
+            source="fallback",
         )
