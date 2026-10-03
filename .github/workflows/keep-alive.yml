@@ -1,0 +1,19 @@
+# Keeps the free Render backend awake during demo hours so visitors skip the
+# ~60 s cold start. Render grants 750 free instance hours per month; this
+# window (12 h/day) uses about 372. Adjust the cron hours (UTC) to your demos,
+# or run it by hand from the Actions tab before a demo.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 3-14 * * *"   # every 10 min, 03:00–14:59 UTC (08:30–20:30 IST)
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: curl -fsS --max-time 90 "${BACKEND_URL:-https://trafficmind-backend.onrender.com}/health" > /dev/null
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}

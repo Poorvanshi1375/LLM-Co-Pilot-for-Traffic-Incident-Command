@@ -1,11 +1,11 @@
-# TrafficMind — AI Co-Pilot for Traffic Incident Command (v2.9.0)
+# TrafficMind — AI Co-Pilot for Traffic Incident Command (v3.0.0)
 
 A real-time, LLM-powered multi-agent system for traffic incident detection, response coordination, and public alert management — built for Brooklyn, NYC.
 
-![TrafficMind](https://img.shields.io/badge/TrafficMind-v2.9.0-2563eb?style=for-the-badge)
+![TrafficMind](https://img.shields.io/badge/TrafficMind-v3.0.0-2563eb?style=for-the-badge)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000?style=flat-square&logo=next.js)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi)
-![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-7C3AED?style=flat-square)
+![Multi-Agent](https://img.shields.io/badge/Multi--Agent-Pipeline-7C3AED?style=flat-square)
 
 ## 🔄 Updates
 
@@ -28,11 +28,11 @@ Refer to it for the latest changes! 😉
 ├──────────────┼───────────────────────┼───────────────────┤
 │              │    AGENT LAYER        │                    │
 │  ┌───────────▼───────────────────────▼────────────┐      │
-│  │           LangGraph Orchestrator               │      │
+│  │         Agent Orchestrator (asyncio)           │      │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       │      │
 │  │  │  Signal   │ │ Routing  │ │  Alert   │       │      │
 │  │  │  Agent    │ │  Agent   │ │  Agent   │       │      │
-│  │  │ (Groq)   │ │ (Groq)   │ │ (Groq)   │       │      │
+│  │  │ (Groq)   │ │(graph+Groq)│ (Groq)   │       │      │
 │  │  └──────────┘ └──────────┘ └──────────┘       │      │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐       │      │
 │  │  │ Density  │ │Supervisor│ │Narrative │       │      │
@@ -53,9 +53,9 @@ Refer to it for the latest changes! 😉
 
 | Feature | Description |
 |---------|-------------|
-| **Real-Time Feed** | 250 Brooklyn road segments with live wall-clock speed data (OSMnx road graph) |
+| **Real-Time Feed** | 250 Brooklyn road segments with simulated wall-clock speed data on the OSM road graph |
 | **Multi-Agent Pipeline** | 6 LLM agents run in parallel fan-out → supervisor fan-in pattern |
-| **API Key Rotation** | Comma-separated key pools for Groq + Gemini; automatic failover on 429 rate limits |
+| **API Key Failover** | Comma-separated key pools for Groq + Gemini; a key failing with 401/403 is benched 10 min, a 429 for 1 min |
 | **Signal Re-Timing** | Upstream/downstream intersection phase adjustments with sensor citations |
 | **Smart Diversion** | Alternative route computation with flow-based volume redistribution |
 | **Triple-Format Alerts** | VMS (≤20 chars/line), 15s radio script, 280-char tweet — format-constrained |
@@ -68,38 +68,38 @@ Refer to it for the latest changes! 😉
 | **Priority Routing** | Emergency vehicle mode (ambulance/police/fire) with edge-weight multipliers + signal preemptions |
 | **Route Intelligence** | 3 candidate routes — green (optimal), yellow (moderate), red (risky) — following actual roads |
 | **Geocoding Search** | Google Maps-style searchbox with Mapbox autocomplete, Brooklyn-scoped |
-| **DBSCAN Hotspot Prediction** | Accident cluster prediction via scikit-learn DBSCAN on OSMnx graph |
+| **DBSCAN Hotspot Prediction** | Accident clusters from DBSCAN over synthetic, road-weighted accidents (precomputed) |
 | **Digital Twin** | Side-by-side before/after comparison map showing intervention impact |
 | **Dynamic Confidence** | Supervisor confidence scores derived from live agent data, not hardcoded defaults |
-| **Sub-2s Response** | Groq Llama 3.3 70B for inference-heavy agents — measured 0.34s E2E |
+| **Fast Response** | Whole agent pipeline measured at about 2.6 s end to end (local run, 2026-10-03) |
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 16, React 19, TypeScript 5, Tailwind v4, Mapbox GL |
-| Backend | FastAPI, Python 3.9+, Pydantic v2 |
-| LLM (Fast) | Groq — Llama 3.3 70B Versatile |
-| LLM (Deep) | Google Gemini 2.0 Flash |
+| Backend | FastAPI, Python 3.11, Pydantic v2 |
+| LLM (Fast) | Groq — openai/gpt-oss-120b (override with `GROQ_MODEL`) |
+| LLM (Deep) | Google Gemini 2.5 Flash via `google-genai` (override with `GEMINI_MODEL`) |
 | STT | Groq Whisper (whisper-large-v3-turbo) |
 | TTS | Browser Web Speech API |
 | Maps | Mapbox GL JS via react-map-gl v8 |
 | Geocoding | Mapbox Search API (backend-proxied) |
-| Road Data | OSMnx (Brooklyn road graph, 250 segments) |
-| Routing | NetworkX shortest_simple_paths on DiGraph |
+| Road Data | Brooklyn OSM drive network (12,223 nodes), prebuilt to a 1.3 MB file; osmnx only at build time |
+| Routing | NetworkX weighted shortest paths with a per-request weight function (time × risk × weather) |
 | Weather | Weather.gov API (free, no key required) |
-| Hotspots | scikit-learn DBSCAN on OSMnx accident data |
+| Hotspots | scikit-learn DBSCAN, precomputed to `data/hotspots.json` |
 | Social | tweepy (Twitter/X OAuth 1.0a) |
-| RAG | TF-IDF vectorizer on 12 SOP documents |
+| RAG | Built-in TF-IDF retriever on 12 SOP documents |
 | Real-Time | WebSocket (5s tick interval) |
 | State | Zustand (client), in-memory (server) |
-| Key Failover | Thread-safe key rotation pool (Groq + Gemini) |
+| Key Failover | Thread-safe key pool with benching of failed keys (Groq + Gemini) |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.11+
 - Node.js 18+
 - API keys: Groq, Google AI Studio, Mapbox
 
@@ -145,7 +145,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 The server will:
-- Download the Brooklyn road graph via OSMnx (cached after first run)
+- Load the prebuilt Brooklyn road graph (`data/brooklyn_graph.json.gz`) in the background
 - Generate 250 road segments
 - Start the real-time feed engine (5s tick interval)
 - Index 12 SOP documents for RAG retrieval
@@ -159,6 +159,35 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) — the landing page. Navigate to `/dashboard` for the operational view.
+
+## Deployment
+
+Backend on Render (`render.yaml`, Docker, free plan), frontend on Vercel.
+
+**Render environment variables**
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `GROQ_API_KEY`, `GOOGLE_AI_API_KEY` | Yes | LLM keys; optional extra keys in `GROQ_API_KEYS` / `GOOGLE_AI_API_KEYS` |
+| `MAPBOX_TOKEN` | Yes | Place search |
+| `ADMIN_TOKEN` | Yes | Operator token for auto-post / auto-detect / key re-check |
+| `ALLOWED_ORIGINS` | Yes | Comma-separated browser origins, e.g. your Vercel production URL |
+| `ALLOWED_ORIGIN_REGEX` | No | Defaults to this project's `*.vercel.app` URLs |
+| `TWITTER_ENABLED` | No | `true` allows tweeting (default `false`) |
+| `AUTO_DETECT_INCIDENTS` | No | `true` starts with auto-detection on (default `false`) |
+| `GROQ_MODEL`, `GEMINI_MODEL` | No | Model overrides |
+
+**Vercel environment variables**: `NEXT_PUBLIC_API_URL` (the Render URL) and `NEXT_PUBLIC_MAPBOX_TOKEN`. Both are baked in at build time, so redeploy after changing them.
+
+After deploying, open `/health`: `road_graph_loaded` should be `true` and both `llm` providers `ok`. Run the end-to-end suite against it with `TM_BASE_URL=https://<backend> pytest backend/tests -v`.
+
+**Rebuilding data files** (only when the road graph changes; needs `pip install -r backend/requirements-dev.txt`):
+
+```bash
+cd backend
+python scripts/build_road_graph.py   # brooklyn.graphml → data/brooklyn_graph.json.gz
+python scripts/build_hotspots.py     # → data/hotspots.json
+```
 
 ## Demo Flow
 
@@ -184,7 +213,7 @@ Open [http://localhost:3000](http://localhost:3000) — the landing page. Naviga
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Server status + segment count |
+| GET | `/health` | Status, road-graph readiness, and per-provider LLM key checks |
 | GET | `/api/state` | Current snapshot, risk map, incident |
 | GET | `/api/agents` | Latest agent outputs |
 | GET | `/api/signals` | Signal re-timing recommendations |
@@ -199,6 +228,13 @@ Open [http://localhost:3000](http://localhost:3000) — the landing page. Naviga
 | POST | `/api/trigger-incident` | Trigger demo incident |
 | POST | `/api/resolve-incident` | Resolve active incident |
 | POST | `/api/chat` | Chat with narrative agent |
+| POST | `/api/chat/voice` | Voice chat (Whisper transcription + answer + TTS audio) |
+| GET | `/api/geocode?q=` | Brooklyn place search (Mapbox Search Box) |
+| POST | `/api/routes` | Up to 3 diverse routes, coloured by average risk |
+| GET | `/api/settings` | Auto-post, auto-detect and server capability flags |
+| POST | `/api/settings/auto-post` | Toggle tweeting (needs `X-Admin-Token`, and `TWITTER_ENABLED=true`) |
+| POST | `/api/settings/auto-detect` | Toggle automatic incident detection (needs `X-Admin-Token`) |
+| POST | `/api/llm/check` | Re-test every LLM key now (needs `X-Admin-Token`) |
 | WS | `/ws/feed` | Real-time WebSocket feed |
 
 ## Multi-Agent Pipeline
@@ -215,12 +251,13 @@ Feed Tick (5s)
     ├─→ RAG Retrieval (TF-IDF, top-2 SOPs)
     │
     ├─→ [PARALLEL FAN-OUT]
-    │       ├─→ Signal Agent (Groq Llama 3.3 70B)
-    │       ├─→ Routing Agent (Groq Llama 3.3 70B)
-    │       ├─→ Alert Agent (Groq Llama 3.3 70B)
+    │       ├─→ Signal Agent (Groq gpt-oss-120b)
+    │       ├─→ Routing Agent (road-graph diversion + Groq narration)
     │       └─→ Density Agent (simulated + optional Gemini vision)
     │
-    └─→ [FAN-IN] Supervisor (Gemini 2.0 Flash)
+    ├─→ Alert Agent (Groq) — after routing, so alerts name the diversion
+    │
+    └─→ [FAN-IN] Supervisor (Gemini 2.5 Flash)
             │
             ├─→ Coherence check
             ├─→ Cascade risk assessment
@@ -242,7 +279,10 @@ trafficmind/
 │   │   ├── feed_engine.py        # Real-time data feed (OSMnx)
 │   │   ├── risk_scorer.py        # Risk computation
 │   │   ├── anomaly_detector.py   # Statistical anomaly detection
-│   │   └── graph.py              # LangGraph orchestrator
+│   │   ├── graph.py              # Agent orchestrator (background task + lock)
+│   │   ├── llm.py                # Shared Groq/Gemini calls: timeouts, failover
+│   │   ├── llm_health.py         # Key self-check reported by /health
+│   │   └── road_graph.py         # Shared road graph + KD-tree lookups
 │   ├── agents/
 │   │   ├── signal_agent.py       # Signal re-timing (Groq)
 │   │   ├── routing_agent.py      # Diversion routing (Groq)
@@ -251,8 +291,10 @@ trafficmind/
 │   │   ├── supervisor.py         # Cross-agent supervision (Gemini)
 │   │   └── narrative_agent.py    # Chat interface (Gemini)
 │   ├── rag/
-│   │   └── retriever.py          # TF-IDF RAG retriever
-│   └── sops/                     # 12 SOP documents
+│   │   ├── retriever.py          # TF-IDF RAG retriever
+│   │   └── documents/            # 12 SOP documents
+│   ├── scripts/                  # Offline builds: road graph, hotspots
+│   └── tests/                    # End-to-end pytest suite
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
@@ -282,8 +324,8 @@ trafficmind/
 
 ## Differentiators
 
-1. **Sub-second inference** — Groq Llama 3.3 70B delivers <0.5s agent responses
-2. **250 real road segments** — Not mock data: actual Brooklyn road network via OSMnx
+1. **Fast inference** — Groq-hosted gpt-oss-120b; the full pipeline runs in about 2.6 s
+2. **Real road network** — 250 monitored segments on the actual Brooklyn OSM graph (speeds are simulated)
 3. **Format-constrained alerts** — VMS signs enforce ≤20 chars/line, tweets ≤280 chars
 4. **RAG-grounded SOPs** — 12 real standard operating procedures validate recommendations + source-cited chat
 5. **Digital twin** — Before/after impact visualization with quantified time savings
@@ -296,7 +338,7 @@ trafficmind/
 12. **DBSCAN hotspot prediction** — Accident cluster zones visualized as graduated risk circles
 13. **Voice-first interface** — End-to-end voice: Groq Whisper STT + Web Speech TTS
 14. **Key rotation failover** — Never go down on a rate limit: automatic Groq/Gemini key pool switching
-15. **Social media pipeline** — Live incident tweets auto-posted from within LangGraph agent step
+15. **Social media pipeline** — Incident tweets can be auto-posted (off unless the server sets `TWITTER_ENABLED=true`)
 
 ## Team
 

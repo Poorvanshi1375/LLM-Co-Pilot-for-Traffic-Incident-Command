@@ -1,0 +1,33 @@
+# Starts the backend with no API keys (agents use their rule-based fallbacks)
+# and runs the end-to-end suite against it.
+name: Backend tests
+
+on:
+  push:
+    paths: ["backend/**", ".github/workflows/backend-tests.yml"]
+  pull_request:
+    paths: ["backend/**"]
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt "pytest>=8,<10"
+      - name: Start backend
+        run: |
+          uvicorn main:app --port 8000 > server.log 2>&1 &
+          for i in $(seq 1 60); do curl -fs localhost:8000/health > /dev/null && break; sleep 1; done
+      - name: Run tests
+        run: TM_BASE_URL=http://localhost:8000 pytest tests -v
+      - name: Server log
+        if: always()
+        run: cat server.log

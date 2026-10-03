@@ -1,6 +1,24 @@
 # TrafficMind Updates Log
 
-## v2.9.0 — Final Polish + E2E Verification (Current)
+## v3.0.0 — Demo Recovery: working agents, real routes, security (Current)
+
+Released: October 3, 2026
+
+- **Agents work again**: `llama-3.3-70b-versatile` was removed from Groq, so every Groq agent had been silently falling back. Default is now `openai/gpt-oss-120b` (`GROQ_MODEL` to override). Gemini moved from the deprecated `google-generativeai` SDK to `google-genai`, with thinking off so short token limits no longer return empty answers.
+- **Shared LLM layer** (`core/llm.py`): timeouts, key failover (401/403 benches a key for 10 min, 429 for 1 min), JSON parsing. `/health` reports per-provider key checks.
+- **Honest output**: every agent result carries `source: llm | fallback`; the UI shows a "Rule-based fallback" badge. Illustrative metrics are labelled.
+- **Real diversion routes**: the diversion is now a weighted shortest path on the road graph around a blocked 200 m zone, following road curves, with extra minutes against the normal direct trip.
+- **Fits the free tier**: the road graph is prebuilt to a 1.3 MB file and loaded once; hotspots are precomputed; osmnx, scikit-learn and pandas left the runtime. Local server memory dropped to about 175 MB.
+- **Route planning**: per-request weight function (no shared-graph mutation), real minutes, routes coloured by average risk.
+- **Pipeline**: runs as a background task under a lock, so the feed keeps ticking and overlapping triggers get 409; alerts run once, after routing; resolve clears all derived state; timeline capped at 200; UTC timestamps.
+- **Phantom incidents**: detector warm-up (1 min) and 3-tick persistence; auto-detect off by default and switchable by the operator.
+- **Security**: tweeting off unless `TWITTER_ENABLED=true`; admin token for settings; one trigger per IP per 30 s; CORS limited to known origins; WebSocket is server-to-client only with an Origin check.
+- **Frontend**: full state on connect, wake-up banner for the sleeping backend, error toasts, responsive layout, Brooklyn landmark search (Mapbox Search Box).
+- **Tests**: `backend/tests/test_e2e.py` (pytest) against any backend URL; CI workflow; optional keep-alive workflow.
+
+---
+
+## v2.9.0 — Final Polish + E2E Verification
 
 Released: March 22, 2026
 
