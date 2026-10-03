@@ -63,6 +63,7 @@ export interface DiversionRoute {
   confidence: number;
   why_safer: string;
   source?: OutputSource;
+  avoids_street?: string;
 }
 
 export interface AlertDrafts {

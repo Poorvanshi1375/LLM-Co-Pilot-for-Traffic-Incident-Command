@@ -4,12 +4,14 @@
 import { TrafficCone, Clock, MapPin, TrendingUp } from "lucide-react";
 import { useTrafficStore } from "@/lib/store";
 import { cn, confidenceColor } from "@/lib/utils";
-import { FallbackBadge } from "@/components/StatusOverlays";
+import { FallbackBadge, AgentsWorking } from "@/components/StatusOverlays";
 
 export default function SignalPanel() {
   const agentOutput = useTrafficStore((s) => s.agentOutput);
   const recs = agentOutput?.signal_recommendations || [];
+  const processing = useTrafficStore((s) => s.processing);
 
+  if (!recs.length && processing) return <AgentsWorking what="Signal re-timing plans" />;
   if (!recs.length) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted py-12">
@@ -54,7 +56,7 @@ export default function SignalPanel() {
 
           <div className="grid grid-cols-2 gap-2 text-xs mb-2">
             <div>
-              <span className="text-muted">Current</span>
+              <span className="text-muted" title="No live signal-controller data: this is the model's assumed typical timing">Assumed current</span>
               <p className="font-medium text-foreground">{rec.current_phase}</p>
             </div>
             <div>

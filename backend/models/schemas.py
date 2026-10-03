@@ -77,6 +77,7 @@ class DiversionRoute(BaseModel):
     confidence: float = 0.5
     why_safer: str = ""
     source: str = "llm"
+    avoids_street: str = ""  # the blocked street the diversion routes around
 
 
 class AlertDrafts(BaseModel):

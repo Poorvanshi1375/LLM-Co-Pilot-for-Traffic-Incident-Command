@@ -2,12 +2,14 @@
 "use client";
 
 import { Brain, FileText, BarChart3, AlertTriangle, ShieldCheck } from "lucide-react";
-import { FallbackBadge } from "@/components/StatusOverlays";
+import { FallbackBadge, AgentsWorking } from "@/components/StatusOverlays";
 import { useTrafficStore } from "@/lib/store";
 
 export default function SummaryPanel() {
   const agentOutput = useTrafficStore((s) => s.agentOutput);
+  const processing = useTrafficStore((s) => s.processing);
 
+  if (!agentOutput && processing) return <AgentsWorking what="The supervisor's summary" />;
   if (!agentOutput) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted py-12">

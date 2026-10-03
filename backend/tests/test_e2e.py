@@ -131,6 +131,8 @@ def test_incident_lifecycle(client):
     # Diversion follows roads and stays out of the blocked zone
     div = output["diversion"]
     assert div, "no diversion route"
+    assert div["avoids_street"] == incident["street_name"]
+    assert incident["street_name"] not in div["route_street_names"], "detour lists the blocked street"
     coords = div["route_coords"]
     assert len(coords) > 2
     assert max(_km(a, b) for a, b in zip(coords, coords[1:])) < 1.0
@@ -162,3 +164,19 @@ def test_place_search_finds_brooklyn_landmarks(client):
     top = hits[0]
     assert "Brooklyn" in top["place_name"]
     assert _km((top["lon"], top["lat"]), (-73.9754, 40.6826)) < 0.5
+
+
+def test_chat_sessions_are_private(client):
+    a, b = {"X-Session-Id": "test-session-a"}, {"X-Session-Id": "test-session-b"}
+    r = client.post("/api/chat", json={"message": "Remember the word pineapple."}, headers=a)
+    assert r.status_code == 200
+    hist_a = client.get("/api/chat/history", headers=a).json()["messages"]
+    hist_b = client.get("/api/chat/history", headers=b).json()["messages"]
+    assert any("pineapple" in m["content"] for m in hist_a)
+    assert not any("pineapple" in m["content"] for m in hist_b)
+
+
+def test_twin_is_empty_without_incident(client):
+    client.post("/api/resolve-incident")
+    twin = client.get("/api/twin").json()
+    assert twin["no_action"] == [] and twin["with_action"] == []

@@ -79,6 +79,17 @@ export function Toaster() {
   );
 }
 
+/** Shown in a results tab while the agent pipeline is still running. */
+export function AgentsWorking({ what }: { what: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-muted py-12" role="status">
+      <Loader2 className="w-8 h-8 mb-3 text-primary animate-spin" />
+      <p className="text-sm font-medium text-foreground">Agents are working…</p>
+      <p className="text-xs mt-1">{what} will appear here in a few seconds</p>
+    </div>
+  );
+}
+
 /** Marks output produced by rule-based fallback because the LLM call failed. */
 export function FallbackBadge({ source, className }: { source?: OutputSource; className?: string }) {
   if (source !== "fallback") return null;

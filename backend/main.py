@@ -181,7 +181,7 @@ app.add_middleware(
     allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=False,  # the app sends no cookies
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Admin-Token"],
+    allow_headers=["Content-Type", "X-Admin-Token", "X-Session-Id"],
 )
 
 
@@ -477,6 +477,29 @@ async def geocode_search(q: str):
     return {"suggestions": suggestions}
 
 
+@app.get("/api/reverse-geocode")
+async def reverse_geocode(lat: float, lon: float):
+    """Nearest street address for a clicked map point (Mapbox Search Box reverse)."""
+    token = os.getenv("MAPBOX_TOKEN", "")
+    if not token:
+        raise HTTPException(status_code=500, detail="MAPBOX_TOKEN not configured")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get("https://api.mapbox.com/search/searchbox/v1/reverse", params={
+                "longitude": lon, "latitude": lat, "access_token": token,
+                "types": "address,street", "limit": 1, "language": "en",
+            })
+            resp.raise_for_status()
+            feats = resp.json().get("features", [])
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Reverse geocoding failed: {type(e).__name__}")
+    if not feats:
+        return {"place_name": None}
+    props = feats[0].get("properties", {})
+    name = props.get("name") or props.get("full_address") or ""
+    return {"place_name": name}
+
+
 @app.post("/api/routes")
 async def compute_routes_endpoint(body: RouteRequest):
     """Compute k-shortest routes between origin and destination."""
@@ -635,26 +658,26 @@ async def set_auto_detect(body: dict, x_admin_token: Optional[str] = Header(defa
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, x_session_id: Optional[str] = Header(default=None)):
     """Send a message to the narrative agent."""
     if not request.message.strip():
         raise HTTPException(status_code=422, detail="Message is empty")
     if len(request.message) > 2000:
         raise HTTPException(status_code=413, detail="Message is longer than 2000 characters")
     narrative = traffic_graph.get_narrative_agent()
-    response = await narrative.chat(request.message)
+    response = await narrative.chat(request.message, session_id=(x_session_id or "")[:64])
     return response.model_dump()
 
 
 @app.get("/api/chat/history")
-async def chat_history():
-    """Get chat conversation history."""
+async def chat_history(x_session_id: Optional[str] = Header(default=None)):
+    """Chat history for this browser session."""
     narrative = traffic_graph.get_narrative_agent()
-    return {"messages": [m.model_dump() for m in narrative.get_messages()]}
+    return {"messages": [m.model_dump() for m in narrative.get_messages((x_session_id or "")[:64])]}
 
 
 @app.post("/api/chat/voice")
-async def chat_voice(audio: UploadFile = File(...)):
+async def chat_voice(audio: UploadFile = File(...), x_session_id: Optional[str] = Header(default=None)):
     """Voice chat: transcribe audio → narrative agent (concise) → gTTS audio."""
     import base64
     from io import BytesIO
@@ -682,7 +705,7 @@ async def chat_voice(audio: UploadFile = File(...)):
 
     transcript = stt["text"]
     narrative = traffic_graph.get_narrative_agent()
-    response = await narrative.chat(transcript, voice=True)
+    response = await narrative.chat(transcript, voice=True, session_id=(x_session_id or "")[:64])
     result = response.model_dump()
     result["transcript"] = transcript
 

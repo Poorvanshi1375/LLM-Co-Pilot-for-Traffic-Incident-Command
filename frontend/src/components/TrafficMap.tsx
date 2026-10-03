@@ -5,7 +5,7 @@ import { useMemo, useCallback, useEffect, useState, useRef } from "react";
 import Map, { Source, Layer, Marker, NavigationControl, type MapRef, type MapMouseEvent } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useTrafficStore } from "@/lib/store";
-import { speedToColor, severityColor } from "@/lib/utils";
+import { speedToColor, severityColor, cn } from "@/lib/utils";
 import { api, errorMessage } from "@/lib/api";
 import { MapPin, X, Loader2 } from "lucide-react";
 import type { SegmentSpeed, GeocodeSuggestion } from "@/lib/types";
@@ -28,6 +28,7 @@ export default function TrafficMap() {
   const setRouteOrigin = useTrafficStore((s) => s.setRouteOrigin);
   const setRouteDestination = useTrafficStore((s) => s.setRouteDestination);
   const candidateRoutes = useTrafficStore((s) => s.candidateRoutes);
+  const setSelectedRouteIndex = useTrafficStore((s) => s.setSelectedRouteIndex);
   const setCandidateRoutes = useTrafficStore((s) => s.setCandidateRoutes);
   const selectedRouteIndex = useTrafficStore((s) => s.selectedRouteIndex);
   const vehicleType = useTrafficStore((s) => s.vehicleType);
@@ -155,12 +156,18 @@ export default function TrafficMap() {
   const handleMapClick = useCallback((e: MapMouseEvent) => {
     if (dashboardMode !== "route") return;
     const { lng, lat } = e.lngLat;
+    const coords = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    // Show coordinates at once, then replace them with the nearest street address
+    const name = (set: (n: string) => void) =>
+      api.reverseGeocode(lat, lng).then((r) => { if (r.place_name) set(r.place_name); }).catch(() => {});
     if (!routeOrigin) {
-      setRouteOrigin({ lat, lon: lng, name: `${lat.toFixed(4)}, ${lng.toFixed(4)}` });
-      setOriginQuery(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+      setRouteOrigin({ lat, lon: lng, name: coords });
+      setOriginQuery(coords);
+      name((n) => { setOriginQuery(n); setRouteOrigin({ lat, lon: lng, name: n }); });
     } else if (!routeDestination) {
-      setRouteDestination({ lat, lon: lng, name: `${lat.toFixed(4)}, ${lng.toFixed(4)}` });
-      setDestQuery(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+      setRouteDestination({ lat, lon: lng, name: coords });
+      setDestQuery(coords);
+      name((n) => { setDestQuery(n); setRouteDestination({ lat, lon: lng, name: n }); });
     }
   }, [dashboardMode, routeOrigin, routeDestination, setRouteOrigin, setRouteDestination]);
 
@@ -403,21 +410,51 @@ export default function TrafficMap() {
           </Source>
         )}
 
-        {/* Candidate Routes (route mode) */}
-        {isRouteMode && routeGeoJSONs.map((geojson, idx) => (
-          <Source key={`route-${idx}`} id={`route-${idx}`} type="geojson" data={geojson}>
-            <Layer
-              id={`route-line-${idx}`}
-              type="line"
-              paint={{
-                "line-color": geojson.properties.color,
-                "line-width": selectedRouteIndex === idx ? 6 : 3,
-                "line-opacity": selectedRouteIndex === idx ? 1 : 0.5,
-              }}
-              layout={{ "line-cap": "round", "line-join": "round" }}
-            />
-          </Source>
-        ))}
+        {/* Candidate Routes (route mode): alternatives grey, the selected one coloured and on top */}
+        {isRouteMode && routeGeoJSONs
+          .map((geojson, idx) => ({ geojson, idx }))
+          .sort((a, b) => (a.idx === selectedRouteIndex ? 1 : 0) - (b.idx === selectedRouteIndex ? 1 : 0))
+          .map(({ geojson, idx }) => (
+            <Source key={`route-${idx}`} id={`route-${idx}`} type="geojson" data={geojson}>
+              <Layer
+                id={`route-casing-${idx}`}
+                type="line"
+                paint={{ "line-color": "#ffffff", "line-width": selectedRouteIndex === idx ? 9 : 6 }}
+                layout={{ "line-cap": "round", "line-join": "round" }}
+              />
+              <Layer
+                id={`route-line-${idx}`}
+                type="line"
+                paint={{
+                  "line-color": selectedRouteIndex === idx ? geojson.properties.color : "#94a3b8",
+                  "line-width": selectedRouteIndex === idx ? 6 : 4,
+                }}
+                layout={{ "line-cap": "round", "line-join": "round" }}
+              />
+            </Source>
+          ))}
+
+        {/* Route number badges at each route's midpoint; click to select */}
+        {isRouteMode && candidateRoutes.map((route) => {
+          const mid = route.coords[Math.floor(route.coords.length / 2)];
+          if (!mid) return null;
+          const selected = selectedRouteIndex === route.route_index;
+          return (
+            <Marker key={`badge-${route.route_index}`} longitude={mid[0]} latitude={mid[1]} anchor="center">
+              <button
+                onClick={(ev) => { ev.stopPropagation(); setSelectedRouteIndex(route.route_index); }}
+                aria-label={`Select route ${route.route_index + 1}`}
+                className={cn(
+                  "w-6 h-6 rounded-full text-[11px] font-bold shadow border-2 border-white",
+                  selected ? "text-white" : "bg-slate-400 text-white",
+                )}
+                style={selected ? { backgroundColor: route.color } : undefined}
+              >
+                {route.route_index + 1}
+              </button>
+            </Marker>
+          );
+        })}
 
         {/* Origin Marker */}
         {isRouteMode && routeOrigin && (

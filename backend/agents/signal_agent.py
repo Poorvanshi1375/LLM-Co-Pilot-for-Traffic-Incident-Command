@@ -20,6 +20,7 @@ near and upstream of a traffic incident.
 CRITICAL RULES:
 - Use REAL street names only, never node IDs or segment IDs
 - Recommend exact phase durations in seconds
+- There is NO live signal-controller data: "current_phase" is your assumed typical baseline for that intersection, not a measurement
 - Focus on intersections within 600m UPSTREAM of the incident (pre-emptive)
 - Explain WHY each change helps (queue prevention, flow management)
 - Provide confidence (0.0-1.0) for each recommendation

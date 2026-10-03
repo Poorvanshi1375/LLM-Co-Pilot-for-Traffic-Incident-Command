@@ -6,6 +6,7 @@ Uses Groq (gpt-oss) with Gemini as fallback, with multi-turn memory.
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from datetime import datetime, timezone
 from models.schemas import (
     SegmentSpeed, RiskEntry, IncidentDetection, AgentOutput,
@@ -13,8 +14,12 @@ from models.schemas import (
 )
 
 from core.llm import generate
+from core.feed_engine import describe_time
 from core.risk_scorer import compute_risk_map
 from rag.retriever import retrieve_sops
+
+MAX_SESSIONS = 500
+MAX_MESSAGES_PER_SESSION = 40
 
 TOOL_PATTERN = r'\[TOOL(?:_CALL)?:\s*(\w+)\(([^)]*)\)\]'
 
@@ -56,7 +61,8 @@ class NarrativeAgent:
     """Conversational agent with TAO loop and tool access."""
 
     def __init__(self, feed_engine=None):
-        self._messages: list[ChatMessage] = []
+        # Conversation memory per browser session, so visitors never see each other's chats
+        self._sessions: "OrderedDict[str, list[ChatMessage]]" = OrderedDict()
         self._incident: IncidentDetection | None = None
         self._agent_output: AgentOutput | None = None
         self._snapshot: list[SegmentSpeed] = []
@@ -180,9 +186,22 @@ class NarrativeAgent:
                 chosen.append(s)
         return chosen[:limit]
 
-    async def chat(self, user_message: str, voice: bool = False) -> ChatResponse:
+    def _history(self, session_id: str) -> list[ChatMessage]:
+        """Messages for one session (created on first use; oldest sessions evicted)."""
+        key = session_id or "anonymous"
+        if key not in self._sessions:
+            self._sessions[key] = []
+            while len(self._sessions) > MAX_SESSIONS:
+                self._sessions.popitem(last=False)
+        self._sessions.move_to_end(key)
+        msgs = self._sessions[key]
+        del msgs[:-MAX_MESSAGES_PER_SESSION]
+        return msgs
+
+    async def chat(self, user_message: str, voice: bool = False, session_id: str = "") -> ChatResponse:
         """Process officer's question through TAO loop."""
-        self._messages.append(ChatMessage(
+        messages = self._history(session_id)
+        messages.append(ChatMessage(
             role="user",
             content=user_message,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -199,7 +218,7 @@ class NarrativeAgent:
                     rag_sources.append(name)
 
         # Build context
-        context_parts = []
+        context_parts = [f"CURRENT TIME (Brooklyn): {describe_time()}"]
 
         if rag_docs:
             context_parts.append("REFERENCE KNOWLEDGE (use as background — do NOT quote verbatim):\n" + "\n---\n".join(rag_docs))
@@ -244,7 +263,7 @@ class NarrativeAgent:
 
         # Build conversation history for Gemini
         history_text = ""
-        for msg in self._messages[-10:]:  # Last 10 messages
+        for msg in messages[-10:]:  # Last 10 messages of this session
             role_label = "OFFICER" if msg.role == "user" else "TRAFFICMIND"
             history_text += f"\n{role_label}: {msg.content}"
 
@@ -297,7 +316,7 @@ Synthesize any reference knowledge into your own words — never copy it verbati
 
         except Exception as e:
             print(f"Narrative agent error: {e}")
-            return self._fallback_response(user_message, rag_sources, error=str(e)[:200])
+            return self._fallback_response(user_message, rag_sources, error=str(e)[:200], session_id=session_id)
 
         # Determine confidence from response
         confidence = 0.8
@@ -316,7 +335,7 @@ Synthesize any reference knowledge into your own words — never copy it verbati
         response_text = re.sub(r'^\s*[*•-]\s+', '- ', response_text, flags=re.MULTILINE)
         response_text = re.sub(r'^#+\s*', '', response_text, flags=re.MULTILINE).strip()
 
-        self._messages.append(ChatMessage(
+        messages.append(ChatMessage(
             role="assistant",
             content=response_text,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -332,7 +351,9 @@ Synthesize any reference knowledge into your own words — never copy it verbati
             rag_sources=rag_sources,
         )
 
-    def _fallback_response(self, question: str, rag_sources: list[str], error: str = "") -> ChatResponse:
+    def _fallback_response(
+        self, question: str, rag_sources: list[str], error: str = "", session_id: str = ""
+    ) -> ChatResponse:
         """Rule-based answer from live tool data when the LLM is unavailable."""
         q = question.lower()
         tool_calls = []
@@ -366,7 +387,7 @@ Synthesize any reference knowledge into your own words — never copy it verbati
                 "and diversion status — try asking about one of those."
             )
 
-        self._messages.append(ChatMessage(
+        self._history(session_id).append(ChatMessage(
             role="assistant",
             content=response,
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -382,12 +403,12 @@ Synthesize any reference knowledge into your own words — never copy it verbati
             error=error,
         )
 
-    def get_messages(self) -> list[ChatMessage]:
-        return self._messages
+    def get_messages(self, session_id: str = "") -> list[ChatMessage]:
+        return list(self._sessions.get(session_id or "anonymous", []))
 
     def clear(self):
         """Forget the conversation and the resolved incident's context."""
-        self._messages.clear()
+        self._sessions.clear()
         self._incident = None
         self._agent_output = None
         self._snapshot = []

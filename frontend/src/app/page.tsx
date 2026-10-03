@@ -60,14 +60,14 @@ const TECH = [
   { icon: Layers, label: "Next.js + TypeScript" },
   { icon: GitBranch, label: "Parallel Multi-Agent Pipeline" },
   { icon: Brain, label: "Groq gpt-oss-120b + Gemini 2.5 Flash" },
-  { icon: Monitor, label: "Mapbox GL + deck.gl" },
+  { icon: Monitor, label: "Mapbox GL Maps" },
   { icon: Radio, label: "WebSocket Real-Time Feed" },
   { icon: Shield, label: "RAG + 12 SOP Documents" },
 ];
 
 const STATS = [
   { value: "6", label: "AI Agents" },
-  { value: "<2s", label: "Response Time" },
+  { value: "~6s", label: "Full Agent Response" },
   { value: "250", label: "Road Segments" },
   { value: "12", label: "SOP Documents" },
 ];
@@ -125,7 +125,7 @@ export default function Home() {
           >
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary/5 border border-primary/20 rounded-full text-xs text-primary font-medium mb-6">
               <Zap className="w-3 h-3" />
-              LLM-Powered Traffic Incident Command
+              LLM-Powered Traffic Incident Command · Demo on a simulated Brooklyn traffic feed
             </div>
           </motion.div>
 
@@ -266,7 +266,7 @@ export default function Home() {
                   <p>Alert Agent (3-format Groq)</p>
                   <p>Density Agent (Gemini Vision)</p>
                   <p>Supervisor (Gemini 2.5 Flash)</p>
-                  <p>Narrative Agent (Gemini Chat)</p>
+                  <p>Narrative Agent (Groq + Gemini)</p>
                 </div>
               </div>
 
@@ -277,7 +277,7 @@ export default function Home() {
                   <h4 className="text-sm font-semibold text-foreground">Presentation Layer</h4>
                 </div>
                 <div className="space-y-1.5 text-xs text-muted">
-                  <p>Mapbox GL + Heatmaps</p>
+                  <p>Mapbox GL Live Traffic Map</p>
                   <p>Real-Time Dashboard</p>
                   <p>Digital Twin Comparison</p>
                   <p>Conversational Interface</p>

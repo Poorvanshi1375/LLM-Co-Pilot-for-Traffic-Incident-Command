@@ -39,6 +39,7 @@ interface TrafficStore {
   messages: ChatMessage[];
   addMessage: (m: ChatMessage) => void;
   clearMessages: () => void;
+  setMessages: (m: ChatMessage[]) => void;
 
   // Timeline
   timeline: TimelineEntry[];
@@ -122,6 +123,7 @@ export const useTrafficStore = create<TrafficStore>((set) => ({
   messages: [],
   addMessage: (m) => set((s) => ({ messages: [...s.messages, m] })),
   clearMessages: () => set({ messages: [] }),
+  setMessages: (messages) => set({ messages }),
 
   timeline: [],
   setTimeline: (timeline) => set({ timeline }),

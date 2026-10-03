@@ -145,7 +145,7 @@ export default function Sidebar() {
           <span>Brooklyn Time</span>
         </div>
         <p className="text-lg font-semibold text-foreground pl-5.5">
-          {formatHour(hour)}
+          {connected && segments.length ? formatHour(hour) : "—"}
         </p>
       </div>
 
@@ -213,6 +213,11 @@ export default function Sidebar() {
                 Est. duration: {incident.duration_estimate_min} min
               </p>
             )}
+            {incident && (
+              <p className="text-[10px] text-muted">
+                Shared simulation — everyone viewing this demo sees the same incident.
+              </p>
+            )}
             {processing && (
               <div className="flex items-center gap-1.5 text-xs text-primary">
                 <Activity className="w-3 h-3 animate-spin" />
@@ -258,7 +263,7 @@ export default function Sidebar() {
               {density.congestion_level}
             </p>
             <p className="text-xs text-muted">
-              ~{density.estimated_vehicles} vehicles
+              ≈{density.estimated_vehicles.toLocaleString("en-US")} vehicles (est.)
             </p>
           </div>
         </div>

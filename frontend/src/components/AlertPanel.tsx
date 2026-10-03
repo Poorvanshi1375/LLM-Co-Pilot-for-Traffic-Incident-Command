@@ -4,14 +4,19 @@
 import { Bell, Monitor, Radio, MessageCircle, Copy, Check } from "lucide-react";
 import { useTrafficStore } from "@/lib/store";
 import { useState } from "react";
-import { FallbackBadge } from "@/components/StatusOverlays";
+import { FallbackBadge, AgentsWorking } from "@/components/StatusOverlays";
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const pushToast = useTrafficStore((s) => s.pushToast);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      pushToast("Couldn't copy — your browser blocked clipboard access. Select the text and copy it manually.");
+    }
   };
   return (
     <button
@@ -27,7 +32,9 @@ function CopyButton({ text }: { text: string }) {
 export default function AlertPanel() {
   const agentOutput = useTrafficStore((s) => s.agentOutput);
   const alerts = agentOutput?.alerts;
+  const processing = useTrafficStore((s) => s.processing);
 
+  if (!alerts && processing) return <AgentsWorking what="Sign, radio and social alerts" />;
   if (!alerts) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted py-12">

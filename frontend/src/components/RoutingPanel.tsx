@@ -9,7 +9,7 @@ import { useTrafficStore } from "@/lib/store";
 import { cn, confidenceColor } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { CandidateRoute } from "@/lib/types";
-import { FallbackBadge } from "@/components/StatusOverlays";
+import { FallbackBadge, AgentsWorking } from "@/components/StatusOverlays";
 
 const COLOR_MAP: Record<string, string> = {
   "#10B981": "bg-emerald-500",
@@ -114,6 +114,7 @@ export default function RoutingPanel() {
   const setSelectedRouteIndex = useTrafficStore((s) => s.setSelectedRouteIndex);
   const routeWeatherCondition = useTrafficStore((s) => s.routeWeatherCondition);
   const routeLoading = useTrafficStore((s) => s.routeLoading);
+  const processing = useTrafficStore((s) => s.processing);
 
   /* ── Route Intelligence Mode ── */
   if (dashboardMode === "route") {
@@ -177,6 +178,7 @@ export default function RoutingPanel() {
   }
 
   /* ── Overview / Incident Diversion Mode ── */
+  if (!diversion && processing) return <AgentsWorking what="The diversion route" />;
   if (!diversion) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted py-12">
@@ -199,6 +201,11 @@ export default function RoutingPanel() {
         {/* Route Streets */}
         <div className="mb-4">
           <span className="text-xs text-muted font-medium">Recommended Path</span>
+          {diversion.avoids_street && (
+            <p className="text-[11px] text-slate-600 mt-1">
+              Leave <strong>{diversion.avoids_street}</strong> before the incident, take these streets, then rejoin it past the blocked zone:
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-1 mt-1.5">
             {diversion.route_street_names.map((street: string, i: number) => (
               <span key={i} className="flex items-center gap-1">
@@ -217,9 +224,13 @@ export default function RoutingPanel() {
         <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="text-center p-2 bg-emerald-50 rounded-lg">
             <TrendingDown className="w-4 h-4 text-success mx-auto mb-1" />
-            <p className="text-xs text-muted">Risk Reduction</p>
-            <p className="text-sm font-bold text-success">
-              {diversion.risk_delta_pct.toFixed(0)}%
+            <p className="text-xs text-muted" title="Average risk along the detour compared with staying on the normal route through the incident">
+              Risk vs. normal route
+            </p>
+            <p className={cn("text-sm font-bold", diversion.risk_delta_pct >= 0 ? "text-success" : "text-danger")}>
+              {diversion.risk_delta_pct >= 0
+                ? `${diversion.risk_delta_pct.toFixed(0)}% lower`
+                : `${Math.abs(diversion.risk_delta_pct).toFixed(0)}% higher`}
             </p>
           </div>
           <div className="text-center p-2 bg-blue-50 rounded-lg">

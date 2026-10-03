@@ -313,15 +313,18 @@ def find_diversion(
         paths = diverse_paths(G, source, target, 1, costs, blocked_nodes=blocked, blocked_edges=blocked_edges)
         if paths:
             info = describe_path(G, paths[0], costs)
-            # Baseline: the direct trip between the same points under normal
-            # (free-flow, speed-limit) conditions, i.e. what drivers lose overall
+            # Baseline: the normal direct trip between the same points. Time is
+            # measured at free flow (what drivers lose overall); risk is measured
+            # under live conditions along that normal path, through the incident.
             normal = EdgeCosts()
             direct = diverse_paths(G, source, target, 1, normal)
             direct_min = describe_path(G, direct[0], normal)["total_travel_time_min"] if direct else info["total_travel_time_min"]
+            direct_risk = describe_path(G, direct[0], costs)["avg_accident_score"] if direct else info["avg_accident_score"]
             blocked_streets = sorted({street_name(G[u][v]) for u, v in blocked_edges} - {"Unknown"})
             return {
                 **info,
                 "extra_minutes": round(max(0.0, info["total_travel_time_min"] - direct_min), 1),
+                "direct_risk": round(direct_risk, 3),
                 "blocked_streets": blocked_streets[:5],
             }
     return None

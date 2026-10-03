@@ -44,6 +44,26 @@ export function setAdminToken(token: string) {
   } catch { /* storage unavailable */ }
 }
 
+/* Per-browser chat session, so visitors never share a conversation */
+const SESSION_KEY = "trafficmind_session";
+export function sessionId(): string {
+  try {
+    let id = localStorage.getItem(SESSION_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(SESSION_KEY, id);
+    }
+    return id;
+  } catch {
+    return "";
+  }
+}
+
+function sessionHeaders(): Record<string, string> {
+  const id = sessionId();
+  return id ? { "X-Session-Id": id } : {};
+}
+
 function adminHeaders(): Record<string, string> {
   const token = getAdminToken();
   return token ? { "X-Admin-Token": token } : {};
@@ -61,10 +81,13 @@ export const api = {
   getHotspots: () => fetchAPI<any>("/api/hotspots"),
   getMetrics: () => fetchAPI<any>("/api/metrics"),
   getTwinData: () => fetchAPI<any>("/api/twin"),
-  getChatHistory: () => fetchAPI<any>("/api/chat/history"),
+  getChatHistory: () => fetchAPI<any>("/api/chat/history", { headers: sessionHeaders() }),
   getDocuments: () => fetchAPI<any>("/api/documents"),
   getWeather: () => fetchAPI<any>("/api/weather"),
   getPredictedHotspots: () => fetchAPI<any>("/api/hotspots/predicted"),
+
+  reverseGeocode: (lat: number, lon: number) =>
+    fetchAPI<{ place_name: string | null }>(`/api/reverse-geocode?lat=${lat}&lon=${lon}`),
 
   geocodeSearch: (query: string) =>
     fetchAPI<any>(`/api/geocode?q=${encodeURIComponent(query)}`),
@@ -99,6 +122,7 @@ export const api = {
   sendChat: (message: string) =>
     fetchAPI<any>("/api/chat", {
       method: "POST",
+      headers: sessionHeaders(),
       body: JSON.stringify({ message }),
     }),
 
@@ -123,7 +147,7 @@ export const api = {
     form.append("audio", audioBlob, "recording.webm");
     let res: Response;
     try {
-      res = await fetch(`${API_URL}/api/chat/voice`, { method: "POST", body: form });
+      res = await fetch(`${API_URL}/api/chat/voice`, { method: "POST", body: form, headers: sessionHeaders() });
     } catch {
       throw new ApiError(0, "Cannot reach the backend — it may still be starting up");
     }

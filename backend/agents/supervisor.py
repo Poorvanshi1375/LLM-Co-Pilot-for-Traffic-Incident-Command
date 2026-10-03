@@ -13,6 +13,7 @@ from models.schemas import (
 )
 
 from core.llm import generate, extract_json
+from core.feed_engine import describe_time
 
 
 SYSTEM_PROMPT = """You are the supervisor of a multi-agent traffic incident management system for Brooklyn, New York.
@@ -76,6 +77,7 @@ async def run_supervisor(
 
     # Build context for Gemini
     agent_data = {
+        "brooklyn_time": describe_time(),
         "incident": {
             "street": incident.street_name,
             "severity": incident.severity.value,

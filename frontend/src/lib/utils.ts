@@ -39,12 +39,14 @@ export function confidenceColor(confidence: number): string {
   return "text-red-600";
 }
 
+/** Clock time in Brooklyn (the sidebar clock uses the same zone), e.g. "9:58:05 AM". */
 export function formatTime(isoString: string): string {
   try {
     return new Date(isoString).toLocaleTimeString("en-US", {
-      hour: "2-digit",
+      hour: "numeric",
       minute: "2-digit",
       second: "2-digit",
+      timeZone: "America/New_York",
     });
   } catch {
     return isoString;

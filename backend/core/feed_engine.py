@@ -56,6 +56,21 @@ def _time_of_day_factor(hour: float, jitter: float = 0.5) -> float:
         return 0.95 + 0.05 * jitter
 
 
+def describe_time(now: datetime | None = None) -> str:
+    """Brooklyn wall-clock time and traffic period, e.g. '9:58 AM (morning peak)'."""
+    now = now or datetime.now(NYC_TZ)
+    hour = now.hour + now.minute / 60.0
+    if MORNING_PEAK[0] <= hour <= MORNING_PEAK[1]:
+        period = "morning peak"
+    elif EVENING_PEAK[0] <= hour <= EVENING_PEAK[1]:
+        period = "evening peak"
+    elif hour >= 22 or hour < 6:
+        period = "night"
+    else:
+        period = "off-peak"
+    return f"{now.strftime('%I:%M %p').lstrip('0')} on {now.strftime('%A')} ({period})"
+
+
 def _download_and_cache_graph():
     """Download Brooklyn road network via OSMnx and cache it."""
     if not OSMNX_AVAILABLE:

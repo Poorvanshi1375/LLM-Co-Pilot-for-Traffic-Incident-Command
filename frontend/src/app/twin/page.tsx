@@ -1,108 +1,44 @@
-/* ── Digital Twin — split-screen comparison view ── */
+/* ── Digital Twin — side-by-side what-if comparison ── */
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { ArrowLeft, Timer, TrendingDown, Zap } from "lucide-react";
+import { ArrowLeft, Timer, TrendingUp, Zap, Play, Loader2, Info } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
-import { speedToColor, cn } from "@/lib/utils";
-import type { TwinData, SegmentSpeed } from "@/lib/types";
+import type { ViewState } from "react-map-gl/mapbox";
+import { api, errorMessage } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import type { TwinData } from "@/lib/types";
 
-const Map = dynamic(
-  () => import("react-map-gl/mapbox").then((mod) => mod.default),
-  { ssr: false }
-);
+// Mapbox needs the browser: load the map component client-side only
+const TwinMap = dynamic(() => import("@/components/TwinMap"), {
+  ssr: false,
+  loading: () => <div className="w-full h-full bg-slate-50" />,
+});
 
-const Source = dynamic(
-  () => import("react-map-gl/mapbox").then((mod) => mod.Source),
-  { ssr: false }
-);
+const CENTER: Partial<ViewState> = { longitude: -73.9442, latitude: 40.6782, zoom: 12.5 };
 
-const Layer = dynamic(
-  () => import("react-map-gl/mapbox").then((mod) => mod.Layer),
-  { ssr: false }
-);
-
-const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
-const CENTER = { longitude: -73.9442, latitude: 40.6782, zoom: 12.5 };
-
-function TwinMap({
-  segments,
-  title,
-  subtitle,
-  borderColor,
-}: {
-  segments: SegmentSpeed[];
-  title: string;
-  subtitle: string;
-  borderColor: string;
-}) {
-  const geojson = useMemo(
-    () => ({
-      type: "FeatureCollection" as const,
-      features: segments.map((seg) => ({
-        type: "Feature" as const,
-        geometry: { type: "Point" as const, coordinates: [seg.lon, seg.lat] },
-        properties: {
-          color: speedToColor(seg.speed, seg.free_flow_speed),
-          speed: Math.round(seg.speed),
-        },
-      })),
-    }),
-    [segments]
-  );
-
-  return (
-    <div className="flex-1 flex flex-col h-full">
-      <div
-        className={cn(
-          "h-10 flex items-center justify-between px-4 border-b-2",
-          borderColor
-        )}
-      >
-        <span className="text-sm font-semibold text-foreground">{title}</span>
-        <span className="text-xs text-muted">{subtitle}</span>
-      </div>
-      <div className="flex-1">
-        <Map
-          initialViewState={CENTER}
-          style={{ width: "100%", height: "100%" }}
-          mapStyle="mapbox://styles/mapbox/light-v11"
-          mapboxAccessToken={MAPBOX_TOKEN}
-          attributionControl={false}
-        >
-          <Source id={`twin-${title}`} type="geojson" data={geojson}>
-            <Layer
-              id={`twin-circles-${title}`}
-              type="circle"
-              paint={{
-                "circle-radius": 7,
-                "circle-color": ["get", "color"],
-                "circle-stroke-width": 1.5,
-                "circle-stroke-color": "#ffffff",
-                "circle-opacity": 0.9,
-              }}
-            />
-          </Source>
-        </Map>
-      </div>
-    </div>
-  );
+function avgSpeed(rows: { speed: number }[] | undefined): number {
+  return rows?.length ? rows.reduce((a, s) => a + s.speed, 0) / rows.length : 0;
 }
 
 export default function TwinPage() {
   const router = useRouter();
   const [data, setData] = useState<TwinData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [starting, setStarting] = useState(false);
+  // Both maps share one view, so panning one pans the other
+  const [view, setView] = useState<Partial<ViewState>>(CENTER);
+  const [centered, setCentered] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchTwin = async () => {
       try {
-        const res = await api.getTwinData();
-        setData(res);
-      } catch {
-        // use empty data
+        setData(await api.getTwinData());
+        setError("");
+      } catch (e) {
+        setError(errorMessage(e));
       } finally {
         setLoading(false);
       }
@@ -112,97 +48,135 @@ export default function TwinPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const avgNoAction =
-    data?.no_action?.length
-      ? Math.round(
-          data.no_action.reduce((a, s) => a + s.speed, 0) / data.no_action.length
-        )
-      : 0;
+  // Centre on the incident the first time it appears
+  const incident = data?.incident ?? null;
+  useEffect(() => {
+    if (incident && centered !== incident.incident_id) {
+      setView({ longitude: incident.lon, latitude: incident.lat, zoom: 13.5 });
+      setCentered(incident.incident_id);
+    }
+  }, [incident, centered]);
 
-  const avgWithAction =
-    data?.with_action?.length
-      ? Math.round(
-          data.with_action.reduce((a, s) => a + s.speed, 0) /
-            data.with_action.length
-        )
-      : 0;
+  const simulate = async () => {
+    setStarting(true);
+    try {
+      await api.triggerIncident("HIGH");
+      setData(await api.getTwinData());
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const noAction = avgSpeed(data?.no_action);
+  const withAction = avgSpeed(data?.with_action);
+  const gainPct = noAction > 0 ? ((withAction - noAction) / noAction) * 100 : 0;
+  const hasIncident = Boolean(incident && data?.no_action?.length);
 
   return (
-    <div className="flex flex-col h-screen bg-background">
-      {/* Top Bar */}
-      <div className="h-14 border-b border-border bg-white flex items-center justify-between px-6">
-        <div className="flex items-center gap-3">
+    <div className="flex flex-col h-dvh bg-background">
+      {/* Top bar */}
+      <div className="border-b border-border bg-white flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 sm:px-6 py-2.5">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={() => router.push("/dashboard")}
-            className="flex items-center gap-1 text-sm text-muted hover:text-foreground transition-colors"
+            className="flex items-center gap-1 text-sm text-muted hover:text-foreground transition-colors shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to Dashboard
+            <span className="hidden sm:inline">Back to Dashboard</span>
+            <span className="sm:hidden">Back</span>
           </button>
           <div className="w-px h-5 bg-border" />
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-primary" />
-            <h1 className="text-sm font-semibold text-foreground">
-              Digital Twin — What-If Analysis
-            </h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <Zap className="w-4 h-4 text-primary shrink-0" />
+            <h1 className="text-sm font-semibold text-foreground truncate">Digital Twin — What-If</h1>
           </div>
         </div>
 
-        {/* Metrics */}
-        {data && (
-          <div className="flex items-center gap-6">
-            <div className="text-center">
-              <p className="text-[10px] text-muted">Avg Speed (No Action)</p>
-              <p className="text-sm font-bold text-danger">{avgNoAction} mph</p>
+        {hasIncident && (
+          <div className="grid grid-cols-3 gap-4 sm:gap-6 text-center">
+            <div>
+              <p className="text-[10px] text-muted">Avg speed, no action</p>
+              <p className="text-sm font-bold text-danger">{noAction.toFixed(0)} mph</p>
             </div>
-            <div className="text-center">
-              <p className="text-[10px] text-muted">Avg Speed (With AI)</p>
-              <p className="text-sm font-bold text-success">{avgWithAction} mph</p>
-            </div>
-            <div className="text-center">
-              <p className="text-[10px] text-muted" title="Illustrative estimate: assumes intervention shortens the incident's impact by 30%">
-                Time Saved (est.)
+            <div>
+              <p className="text-[10px] text-muted">Avg speed, with AI plan</p>
+              <p className="text-sm font-bold text-success flex items-center justify-center gap-1">
+                {withAction.toFixed(0)} mph
+                <span className="text-[10px] font-semibold flex items-center"><TrendingUp className="w-3 h-3" />{gainPct.toFixed(0)}%</span>
               </p>
-              <p className="text-sm font-bold text-primary flex items-center gap-1">
+            </div>
+            <div>
+              <p className="text-[10px] text-muted">Time saved (est.)</p>
+              <p className="text-sm font-bold text-primary flex items-center justify-center gap-1">
                 <Timer className="w-3.5 h-3.5" />
-                {data.time_saved_min?.toFixed(1) ?? "—"} min
+                {data?.time_saved_min?.toFixed(1)} min
               </p>
-            </div>
-            <div className="flex items-center gap-1 text-sm font-semibold text-success">
-              <TrendingDown className="w-4 h-4" />
-              {avgWithAction > 0
-                ? `+${(((avgWithAction - avgNoAction) / Math.max(avgNoAction, 1)) * 100).toFixed(0)}%`
-                : "—"}
             </div>
           </div>
         )}
       </div>
 
-      {/* Split Maps */}
-      <div className="flex-1 flex">
+      {hasIncident && (
+        <div className="flex items-start gap-2 px-4 sm:px-6 py-2 text-[11px] text-slate-600 bg-slate-50 border-b border-border">
+          <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-muted" />
+          <span>
+            Incident on <strong>{incident?.street_name}</strong>. Left: congestion spreads around it if nothing is done.
+            Right: the diversion and signal changes in place. Both sides come from a simple illustrative model, not a traffic simulation.
+            The two maps move together.
+          </span>
+        </div>
+      )}
+
+      {/* Maps, or an explanation of what is missing */}
+      <div className="flex-1 min-h-0">
         {loading ? (
-          <div className="flex-1 flex items-center justify-center text-muted">
-            <p className="text-sm">Loading twin data…</p>
+          <div className="h-full flex items-center justify-center text-muted text-sm">Loading twin data…</div>
+        ) : hasIncident ? (
+          <div className="h-full flex flex-col md:flex-row">
+            {[
+              { id: "before", title: "Without TrafficMind", subtitle: "No intervention", rows: data!.no_action, border: "border-danger" },
+              { id: "after", title: "With TrafficMind", subtitle: "Diversion + signal plan", rows: data!.with_action, border: "border-success" },
+            ].map((side, i) => (
+              <div key={side.id} className={cn("flex-1 min-h-0 flex flex-col", i === 0 && "border-b md:border-b-0 md:border-r border-border")}>
+                <div className={cn("h-9 shrink-0 flex items-center justify-between px-4 border-b-2 bg-white", side.border)}>
+                  <span className="text-sm font-semibold text-foreground">{side.title}</span>
+                  <span className="text-xs text-muted">{side.subtitle}</span>
+                </div>
+                <div className="flex-1 min-h-0">
+                  <TwinMap id={side.id} segments={side.rows} incident={incident} viewState={view} onMove={setView} />
+                </div>
+              </div>
+            ))}
           </div>
-        ) : data ? (
-          <>
-            <TwinMap
-              segments={data.no_action || []}
-              title="Without TrafficMind"
-              subtitle="No intervention scenario"
-              borderColor="border-danger"
-            />
-            <div className="w-px bg-border" />
-            <TwinMap
-              segments={data.with_action || []}
-              title="With TrafficMind"
-              subtitle="AI-optimized response"
-              borderColor="border-success"
-            />
-          </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-muted">
-            <p className="text-sm">No twin data available. Trigger an incident first.</p>
+          <div className="h-full flex items-center justify-center p-6">
+            <div className="max-w-sm text-center">
+              <Zap className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+              <p className="text-sm font-semibold text-foreground">No active incident to compare</p>
+              <p className="text-xs text-muted mt-1.5 leading-relaxed">
+                The digital twin compares what happens around an incident with and without TrafficMind&apos;s plan.
+                Start a simulated incident to see it.
+              </p>
+              {error && <p className="text-xs text-danger mt-2">{error}</p>}
+              <div className="flex items-center justify-center gap-2 mt-4">
+                <button
+                  onClick={simulate}
+                  disabled={starting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-danger text-white rounded-lg hover:bg-danger/90 disabled:opacity-50"
+                >
+                  {starting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                  {starting ? "Starting…" : "Simulate Incident"}
+                </button>
+                <button
+                  onClick={() => router.push("/dashboard")}
+                  className="px-3 py-1.5 text-xs font-medium border border-border rounded-lg hover:bg-slate-50"
+                >
+                  Open dashboard
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

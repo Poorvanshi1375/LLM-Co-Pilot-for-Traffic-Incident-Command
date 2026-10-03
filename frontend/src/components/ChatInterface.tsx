@@ -41,6 +41,7 @@ function RagSourceBadges({ sources }: { sources: string[] }) {
 export default function ChatInterface() {
   const messages = useTrafficStore((s) => s.messages);
   const addMessage = useTrafficStore((s) => s.addMessage);
+  const setMessages = useTrafficStore((s) => s.setMessages);
   const pushToast = useTrafficStore((s) => s.pushToast);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -63,6 +64,14 @@ export default function ChatInterface() {
       behavior: "smooth",
     });
   }, [messages]);
+
+  // Restore this browser's conversation after a reload (the server keeps it per session)
+  useEffect(() => {
+    if (useTrafficStore.getState().messages.length) return;
+    api.getChatHistory()
+      .then((res) => { if (res?.messages?.length) setMessages(res.messages); })
+      .catch(() => {});
+  }, [setMessages]);
 
   // Cleanup on unmount
   useEffect(() => {

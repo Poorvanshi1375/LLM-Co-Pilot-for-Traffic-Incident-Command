@@ -49,6 +49,7 @@ export default function DashboardPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pushToast = useTrafficStore((s) => s.pushToast);
   const processing = useTrafficStore((s) => s.processing);
+  const connected = useTrafficStore((s) => s.connected);
   const dashboardMode = useTrafficStore((s) => s.dashboardMode);
   const setDashboardMode = useTrafficStore((s) => s.setDashboardMode);
   const vehicleType = useTrafficStore((s) => s.vehicleType);
@@ -183,7 +184,8 @@ export default function DashboardPage() {
             {!incident ? (
               <button
                 onClick={handleTrigger}
-                disabled={triggerLoading || processing}
+                disabled={triggerLoading || processing || !connected}
+                title={!connected ? "Waiting for the backend to connect" : undefined}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-danger text-white rounded-lg hover:bg-danger/90 disabled:opacity-50 transition-colors"
               >
                 <Play className="w-3 h-3" />
@@ -192,7 +194,8 @@ export default function DashboardPage() {
             ) : (
               <button
                 onClick={handleResolve}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-success text-white rounded-lg hover:bg-success/90 transition-colors"
+                disabled={!connected}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-success text-white rounded-lg hover:bg-success/90 disabled:opacity-50 transition-colors"
               >
                 <Square className="w-3 h-3" />
                 Resolve Incident
