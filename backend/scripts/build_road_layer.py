@@ -1,8 +1,9 @@
-"""Build the map's road layer: every Brooklyn road as a line, as static GeoJSON.
+"""Build the map's traffic layer: roads with live data, as static GeoJSON.
 
-Writes frontend/public/road-network.geojson. Each feature has:
-  c — road class for styling: 0 highway, 1 primary, 2 secondary/tertiary, 3 minor
-  s — (only on roads with live data) the monitored segment whose speed colours it
+Writes frontend/public/road-network.geojson. The base map already draws every
+road in grey, so only roads that carry a live colour are included. Each has:
+  c — road class: 0 highway, 1 primary, 2 secondary/tertiary, 3 minor
+  s — the monitored segment whose speed colours it
 
 A road takes a segment's colour only if it is the SAME street and within
 MATCH_KM of that segment, so side streets stay grey instead of borrowing an
@@ -21,7 +22,7 @@ from core.road_graph import get_graph, street_name  # noqa: E402
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 SEGMENTS_PATH = os.path.join(ROOT, "backend", "data", "brooklyn_segments.json")
 OUT_PATH = os.path.join(ROOT, "frontend", "public", "road-network.geojson")
-MATCH_KM = 0.6
+MATCH_KM = 1.2  # long enough that a monitored avenue reads as one continuous line
 
 CLASS = {
     "motorway": 0, "motorway_link": 0, "trunk": 0, "trunk_link": 0,
@@ -66,10 +67,11 @@ for u, v, d in G.edges(data=True):
             props["s"] = best["segment_id"]
             colored += 1
 
-    features.append({"type": "Feature", "properties": props, "geometry": {"type": "LineString", "coordinates": coords}})
+    if "s" in props:
+        features.append({"type": "Feature", "properties": props, "geometry": {"type": "LineString", "coordinates": coords}})
 
 with open(OUT_PATH, "w", encoding="utf-8") as f:
     json.dump({"type": "FeatureCollection", "features": features}, f, separators=(",", ":"))
 
-print(f"Wrote {len(features)} roads ({colored} with live data) to {OUT_PATH} "
+print(f"Wrote {len(features)} roads with live data to {OUT_PATH} "
       f"({os.path.getsize(OUT_PATH) / 1e6:.1f} MB)")

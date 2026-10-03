@@ -9,6 +9,7 @@ import { speedToColor, severityColor } from "@/lib/utils";
 import { api, errorMessage } from "@/lib/api";
 import { MapPin, X, Loader2 } from "lucide-react";
 import type { SegmentSpeed, GeocodeSuggestion } from "@/lib/types";
+import MapSearch from "@/components/MapSearch";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 const BROOKLYN_CENTER = { longitude: -73.9442, latitude: 40.6782, zoom: 12.5 };
@@ -188,8 +189,59 @@ export default function TrafficMap() {
   }, [segmentById]);
 
   // Optional overlays (legend toggles)
-  const [showHotspots, setShowHotspots] = useState(true);
+  const [showHotspots, setShowHotspots] = useState(false);
   const [showRiskHeat, setShowRiskHeat] = useState(false);
+
+  // Search focus: a monitored street (spotlighted) or a place (pin + nearest reading)
+  const [focus, setFocus] = useState<
+    | { kind: "street"; name: string }
+    | { kind: "place"; name: string; lat: number; lon: number }
+    | null
+  >(null);
+
+  const focusStreet = useCallback((name: string) => {
+    const segs = segments.filter((s) => s.street_name === name);
+    if (!segs.length) return;
+    setFocus({ kind: "street", name });
+    const lons = segs.map((s) => s.lon), lats = segs.map((s) => s.lat);
+    mapRef.current?.fitBounds(
+      [[Math.min(...lons) - 0.004, Math.min(...lats) - 0.004], [Math.max(...lons) + 0.004, Math.max(...lats) + 0.004]],
+      { padding: 60, duration: 1000, maxZoom: 15 },
+    );
+  }, [segments]);
+
+  const focusPlace = useCallback((p: GeocodeSuggestion) => {
+    setFocus({ kind: "place", name: p.place_name, lat: p.lat, lon: p.lon });
+    mapRef.current?.flyTo({ center: [p.lon, p.lat], zoom: 15, duration: 1000 });
+  }, []);
+
+  // Live readings for the info card
+  const focusInfo = useMemo(() => {
+    if (!focus) return null;
+    if (focus.kind === "street") {
+      const segs = segments.filter((s) => s.street_name === focus.name);
+      if (!segs.length) return null;
+      const ratio = segs.reduce((a, s) => a + s.speed / Math.max(s.free_flow_speed, 1), 0) / segs.length;
+      const speed = segs.reduce((a, s) => a + s.speed, 0) / segs.length;
+      return { title: focus.name, subtitle: `${segs.length} monitored stretch${segs.length > 1 ? "es" : ""} (average)`, speed, ratio };
+    }
+    const km = (s: SegmentSpeed) => Math.hypot((s.lat - focus.lat) * 111, (s.lon - focus.lon) * 84);
+    const nearest = [...segments].sort((a, b) => km(a) - km(b))[0];
+    if (!nearest || km(nearest) > 1.5) {
+      return { title: focus.name, subtitle: "No live sensor within 1.5 km", speed: null, ratio: null };
+    }
+    return {
+      title: focus.name,
+      subtitle: `Nearest live reading: ${nearest.street_name}, ${Math.round(km(nearest) * 1000)} m away`,
+      speed: nearest.speed,
+      ratio: nearest.speed / Math.max(nearest.free_flow_speed, 1),
+    };
+  }, [focus, segments]);
+
+  const focusIds = useMemo(
+    () => (focus?.kind === "street" ? segments.filter((s) => s.street_name === focus.name).map((s) => s.segment_id) : []),
+    [focus, segments],
+  );
 
   // Draw our road lines under the base map's labels so street names stay readable
   const [labelLayerId, setLabelLayerId] = useState<string | undefined>(undefined);
@@ -265,17 +317,15 @@ export default function TrafficMap() {
         {/* Every road, grey; monitored roads coloured by live speed (overview mode) */}
         {!isRouteMode && (
           <Source id="road-network" type="geojson" data="/road-network.geojson">
+            {/* Soft white edge under each traffic line keeps it crisp against the base map */}
             <Layer
-              id="roads-base"
+              id="roads-traffic-casing"
               type="line"
               beforeId={labelLayerId}
               paint={{
-                "line-color": ["match", ["get", "c"], 0, "#9ca3af", 1, "#a8b0bc", 2, "#b8bfca", "#cfd4db"],
-                "line-width": [
-                  "interpolate", ["linear"], ["zoom"],
-                  11, ["match", ["get", "c"], 0, 1.6, 1, 1.2, 2, 0.8, 0.3],
-                  15, ["match", ["get", "c"], 0, 5, 1, 4, 2, 3, 1.5],
-                ],
+                "line-color": "#ffffff",
+                "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 13, 4.5, 16, 9],
+                "line-opacity": focusIds.length ? ["match", ["get", "s"], focusIds, 0.9, 0.2] : 0.85,
               }}
               layout={{ "line-cap": "round", "line-join": "round" }}
             />
@@ -283,10 +333,10 @@ export default function TrafficMap() {
               id="roads-traffic"
               type="line"
               beforeId={labelLayerId}
-              filter={["has", "s"]}
               paint={{
                 "line-color": trafficColor,
-                "line-width": ["interpolate", ["linear"], ["zoom"], 11, 2.2, 15, 6],
+                "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 13, 2.6, 16, 6],
+                "line-opacity": focusIds.length ? ["match", ["get", "s"], focusIds, 1, 0.2] : 0.9,
               }}
               layout={{ "line-cap": "round", "line-join": "round" }}
             />
@@ -389,6 +439,13 @@ export default function TrafficMap() {
           </Marker>
         )}
 
+        {/* Searched place */}
+        {!isRouteMode && focus?.kind === "place" && (
+          <Marker latitude={focus.lat} longitude={focus.lon} anchor="bottom">
+            <MapPin className="w-7 h-7 text-primary fill-primary/20 drop-shadow-md" />
+          </Marker>
+        )}
+
         {/* Incident Marker */}
         {incident && (
           <Marker latitude={incident.lat} longitude={incident.lon} anchor="center">
@@ -407,6 +464,43 @@ export default function TrafficMap() {
           </Marker>
         )}
       </Map>
+
+      {/* Search + info card (overview mode) */}
+      {!isRouteMode && (
+        <div className="absolute top-3 right-3 w-[calc(100%-4.5rem)] sm:w-80 space-y-2 z-10">
+          <MapSearch
+            segments={segments}
+            onPickStreet={focusStreet}
+            onPickPlace={focusPlace}
+            onClear={() => setFocus(null)}
+          />
+          {focusInfo && (
+            <div className="bg-white rounded-lg shadow-md border border-slate-200 px-3 py-2.5 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-foreground leading-snug">{focusInfo.title}</p>
+                <button onClick={() => setFocus(null)} aria-label="Close" className="text-muted hover:text-foreground">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-muted mt-0.5">{focusInfo.subtitle}</p>
+              {focusInfo.ratio !== null && focusInfo.speed !== null && (
+                <div className="flex items-center gap-2 mt-2">
+                  <span
+                    className="inline-block w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: speedToColor(focusInfo.ratio * 100, 100) }}
+                  />
+                  <span className="font-medium text-foreground">
+                    {focusInfo.ratio > 0.7 ? "Moving well" : focusInfo.ratio > 0.4 ? "Slow" : "Congested"}
+                  </span>
+                  <span className="text-muted">
+                    · {Math.round(focusInfo.speed)} mph, {Math.round(focusInfo.ratio * 100)}% of normal
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Search Boxes (route mode) */}
       {isRouteMode && (
@@ -494,59 +588,34 @@ export default function TrafficMap() {
         </div>
       )}
 
-      {/* Map Legend */}
-      <div className="hidden sm:block absolute bottom-4 left-4 glass-card rounded-lg p-3 text-xs">
-        <div className="font-semibold mb-1.5 text-slate-700">
-          {isRouteMode ? "Route Legend" : "Traffic Conditions"}
+      {/* Map Legend (compact) */}
+      <div className="hidden sm:block absolute bottom-4 left-4 bg-white/90 backdrop-blur rounded-lg shadow-sm border border-slate-200 px-3 py-2 text-[11px]">
+        <div className="flex items-center gap-3">
+          {(isRouteMode
+            ? [["bg-emerald-500", "Low risk"], ["bg-amber-500", "Moderate"], ["bg-red-500", "High risk"]]
+            : [["bg-emerald-500", "Moving well"], ["bg-amber-500", "Slow"], ["bg-red-500", "Congested"]]
+          ).map(([cls, label]) => (
+            <span key={label} className="flex items-center gap-1.5 text-slate-600">
+              <span className={`w-4 h-1 rounded-full ${cls}`} />
+              {label}
+            </span>
+          ))}
         </div>
-        {isRouteMode ? (
-          <>
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className="w-6 h-0.5 bg-emerald-500 rounded" />
-              <span className="text-slate-600">Low risk</span>
-            </div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className="w-6 h-0.5 bg-amber-500 rounded" />
-              <span className="text-slate-600">Moderate risk</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-6 h-0.5 bg-red-500 rounded" />
-              <span className="text-slate-600">High risk</span>
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className="w-5 h-1 rounded bg-emerald-500" />
-              <span className="text-slate-600">Moving well (over 70% of normal)</span>
-            </div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className="w-5 h-1 rounded bg-amber-500" />
-              <span className="text-slate-600">Slow (40–70%)</span>
-            </div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <div className="w-5 h-1 rounded bg-red-500" />
-              <span className="text-slate-600">Congested (under 40%)</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-5 h-0.5 rounded bg-slate-400" />
-              <span className="text-slate-500">No live sensor</span>
-            </div>
-          </>
-        )}
-        <div className="border-t border-slate-200 my-1.5" />
-        <label className="flex items-center gap-1.5 cursor-pointer select-none">
-          <input type="checkbox" checked={showHotspots} onChange={(e) => setShowHotspots(e.target.checked)} className="accent-red-500" />
-          <span className="w-3 h-3 rounded-full bg-red-500/10 border border-red-500/50" />
-          <span className="text-slate-600">Predicted hotspots</span>
-        </label>
         {!isRouteMode && (
-          <label className="flex items-center gap-1.5 mt-1 cursor-pointer select-none">
-            <input type="checkbox" checked={showRiskHeat} onChange={(e) => setShowRiskHeat(e.target.checked)} className="accent-red-500" />
-            <span className="w-3 h-3 rounded-full bg-gradient-to-br from-amber-300/60 to-red-500/60" />
-            <span className="text-slate-600">Risk heatmap</span>
-          </label>
+          <p className="text-[10px] text-muted mt-1">Grey roads have no live sensor · hover a road for its speed</p>
         )}
+        <div className="flex items-center gap-3 mt-1.5 pt-1.5 border-t border-slate-200">
+          <label className="flex items-center gap-1 cursor-pointer select-none text-slate-600">
+            <input type="checkbox" checked={showHotspots} onChange={(e) => setShowHotspots(e.target.checked)} className="accent-red-500 w-3 h-3" />
+            Hotspots
+          </label>
+          {!isRouteMode && (
+            <label className="flex items-center gap-1 cursor-pointer select-none text-slate-600">
+              <input type="checkbox" checked={showRiskHeat} onChange={(e) => setShowRiskHeat(e.target.checked)} className="accent-red-500 w-3 h-3" />
+              Risk heatmap
+            </label>
+          )}
+        </div>
       </div>
 
       {/* Hover card for a coloured road */}

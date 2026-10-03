@@ -13,7 +13,8 @@ Released: October 3, 2026
 - **Borough-wide coverage**: the 250 monitored segments were clustered in east/south Brooklyn; they are now one major-road segment per grid cell across the borough (`scripts/build_segments.py`), so 79% of road edges get live speed and risk (was 29%).
 - **Diversion clearance**: edges whose geometry passes within 200 m of the incident are blocked, not just nearby nodes.
 - **Dashboard**: map flies to a new incident and fits its diversion; chat answers are plain text.
-- **Traffic map redesign**: every Brooklyn road drawn in grey (static `road-network.geojson`), monitored roads coloured green/orange/red along their length, hover card with street and speed; hotspots as subtle rings and the risk heatmap as legend toggles; dots and glow removed.
+- **Traffic map redesign**: clean base map with only live traffic lines on top (green/orange/red with a soft white edge, continuous along each monitored street), hover card with street and speed, compact legend; hotspots and risk heatmap off by default behind toggles; dots and glow removed.
+- **Map search** (overview mode): monitored streets match instantly and get spotlighted with their average live speed; places (Mapbox Search Box) get a pin and the nearest live reading.
 - **LLM resilience**: Gemini <-> Groq cross-provider fallback (Gemini's free tier allows only 20 requests/day), second Groq model on per-minute limits, daily-quota keys benched for an hour, `/health` shows runtime `last_errors`. Chat runs on Groq first with a compact prompt.
 - **Chat grounding**: explicit "no incident" context and a rule against inventing figures; diversion facts passed verbatim; compliance stated as not measured.
 - **Operator toggles** stay locked with a hint until the server has an `ADMIN_TOKEN` and the token is saved in the browser.
