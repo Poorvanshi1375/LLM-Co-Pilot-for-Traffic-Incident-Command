@@ -1,7 +1,9 @@
 /* ── Landing Page — marketing-grade hero ── */
 "use client";
 
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { api } from "@/lib/api";
 import { motion } from "framer-motion";
 import {
   Zap, TrafficCone, Navigation, Bell, MessageSquare,
@@ -20,7 +22,7 @@ const FEATURES = [
   {
     icon: Navigation,
     title: "Dynamic Routing",
-    desc: "A* pathfinding with risk-weighted edges generates safer diversion corridors in real-time.",
+    desc: "Risk-weighted shortest paths on the real Brooklyn road graph route traffic around the blocked zone in real time.",
     color: "text-blue-600",
     bg: "bg-blue-50",
   },
@@ -41,7 +43,7 @@ const FEATURES = [
   {
     icon: Brain,
     title: "Multi-Agent Orchestration",
-    desc: "LangGraph-powered supervisor coordinates specialist agents with fan-out parallel execution.",
+    desc: "A supervisor agent checks the specialist agents' outputs for conflicts after they run in parallel.",
     color: "text-purple-600",
     bg: "bg-purple-50",
   },
@@ -56,8 +58,8 @@ const FEATURES = [
 
 const TECH = [
   { icon: Layers, label: "Next.js + TypeScript" },
-  { icon: GitBranch, label: "LangGraph Multi-Agent" },
-  { icon: Brain, label: "Groq Llama 3.3 + Gemini 2.0" },
+  { icon: GitBranch, label: "Parallel Multi-Agent Pipeline" },
+  { icon: Brain, label: "Groq gpt-oss-120b + Gemini 2.5 Flash" },
   { icon: Monitor, label: "Mapbox GL + deck.gl" },
   { icon: Radio, label: "WebSocket Real-Time Feed" },
   { icon: Shield, label: "RAG + 12 SOP Documents" },
@@ -66,7 +68,7 @@ const TECH = [
 const STATS = [
   { value: "6", label: "AI Agents" },
   { value: "<2s", label: "Response Time" },
-  { value: "50+", label: "Road Segments" },
+  { value: "250", label: "Road Segments" },
   { value: "12", label: "SOP Documents" },
 ];
 
@@ -81,6 +83,11 @@ const fadeUp = {
 
 export default function Home() {
   const router = useRouter();
+
+  // Start waking the (free-tier, possibly sleeping) backend before the user opens the dashboard
+  useEffect(() => {
+    api.health().catch(() => {});
+  }, []);
 
   return (
     <div className="min-h-screen bg-white">
@@ -225,7 +232,7 @@ export default function Home() {
               Multi-Agent Architecture
             </h2>
             <p className="text-muted max-w-2xl mx-auto">
-              Built on LangGraph with fan-out parallel execution, RAG-enhanced decision making,
+              Built on a parallel fan-out agent pipeline, RAG-enhanced decision making,
               and real-time WebSocket communication.
             </p>
           </div>
@@ -254,11 +261,11 @@ export default function Home() {
                   <h4 className="text-sm font-semibold text-foreground">Agent Layer</h4>
                 </div>
                 <div className="space-y-1.5 text-xs text-muted">
-                  <p>Signal Agent (Groq Llama 3.3)</p>
-                  <p>Routing Agent (A* + Groq)</p>
+                  <p>Signal Agent (Groq gpt-oss)</p>
+                  <p>Routing Agent (road graph + Groq)</p>
                   <p>Alert Agent (3-format Groq)</p>
                   <p>Density Agent (Gemini Vision)</p>
-                  <p>Supervisor (Gemini 2.0 Flash)</p>
+                  <p>Supervisor (Gemini 2.5 Flash)</p>
                   <p>Narrative Agent (Gemini Chat)</p>
                 </div>
               </div>

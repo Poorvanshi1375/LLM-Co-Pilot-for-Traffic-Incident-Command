@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import {
   TrafficCone, Navigation, Bell, MessageSquare,
   Clock, Brain, AlertTriangle, Play, Square,
-  Map as MapIcon, Route, Ambulance, ShieldCheck, Flame, Car,
+  Map as MapIcon, Route, Ambulance, ShieldCheck, Flame, Car, Menu, X,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import SignalPanel from "@/components/SignalPanel";
@@ -15,9 +15,10 @@ import AlertPanel from "@/components/AlertPanel";
 import ChatInterface from "@/components/ChatInterface";
 import Timeline from "@/components/Timeline";
 import SummaryPanel from "@/components/SummaryPanel";
+import { BackendStatusBanner, Toaster } from "@/components/StatusOverlays";
 import { useWebSocket } from "@/lib/useWebSocket";
 import { useTrafficStore } from "@/lib/store";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { VehicleType } from "@/lib/types";
 
@@ -45,6 +46,9 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState("signals");
   const incident = useTrafficStore((s) => s.incident);
   const [triggerLoading, setTriggerLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const pushToast = useTrafficStore((s) => s.pushToast);
+  const processing = useTrafficStore((s) => s.processing);
   const dashboardMode = useTrafficStore((s) => s.dashboardMode);
   const setDashboardMode = useTrafficStore((s) => s.setDashboardMode);
   const vehicleType = useTrafficStore((s) => s.vehicleType);
@@ -61,8 +65,8 @@ export default function DashboardPage() {
     setTriggerLoading(true);
     try {
       await api.triggerIncident("HIGH");
-    } catch {
-      // ignore
+    } catch (e) {
+      pushToast(errorMessage(e));
     } finally {
       setTriggerLoading(false);
     }
@@ -71,22 +75,48 @@ export default function DashboardPage() {
   const handleResolve = async () => {
     try {
       await api.resolveIncident();
-    } catch {
-      // ignore
+    } catch (e) {
+      pushToast(errorMessage(e));
     }
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Left Sidebar */}
-      <Sidebar />
+    <div className="flex h-dvh overflow-hidden bg-background">
+      {/* Left Sidebar — fixed on large screens, a drawer below 1024px */}
+      <div className="hidden lg:flex">
+        <Sidebar />
+      </div>
+      {sidebarOpen && (
+        <div className="lg:hidden fixed inset-0 z-40 flex">
+          <div className="absolute inset-0 bg-slate-900/30" onClick={() => setSidebarOpen(false)} />
+          <div className="relative z-10 h-full shadow-xl">
+            <Sidebar />
+            <button
+              onClick={() => setSidebarOpen(false)}
+              aria-label="Close sidebar"
+              className="absolute top-4 right-3 text-muted hover:text-foreground"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <BackendStatusBanner />
+
         {/* Top Control Bar */}
-        <div className="h-12 border-b border-border bg-white flex items-center justify-between px-4">
+        <div className="min-h-12 border-b border-border bg-white flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-2">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-foreground">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Open sidebar"
+              className="lg:hidden text-muted hover:text-foreground"
+            >
+              <Menu className="w-4 h-4" />
+            </button>
+            <h2 className="hidden sm:block text-sm font-semibold text-foreground">
               Command Dashboard
             </h2>
             {incident && (
@@ -110,7 +140,7 @@ export default function DashboardPage() {
                 )}
               >
                 <MapIcon className="w-3 h-3" />
-                Overview
+                <span className="hidden sm:inline">Overview</span>
               </button>
               <button
                 onClick={() => setDashboardMode("route")}
@@ -122,7 +152,7 @@ export default function DashboardPage() {
                 )}
               >
                 <Route className="w-3 h-3" />
-                Route Planning
+                <span className="hidden sm:inline">Route Planning</span>
               </button>
             </div>
 
@@ -153,7 +183,7 @@ export default function DashboardPage() {
             {!incident ? (
               <button
                 onClick={handleTrigger}
-                disabled={triggerLoading}
+                disabled={triggerLoading || processing}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-danger text-white rounded-lg hover:bg-danger/90 disabled:opacity-50 transition-colors"
               >
                 <Play className="w-3 h-3" />
@@ -171,15 +201,15 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Content: Map + Right Panel */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Map (65%) */}
-          <div className="w-[65%] h-full">
+        {/* Content: Map + Right Panel (stacked below 768px) */}
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+          {/* Map */}
+          <div className="h-[45%] md:h-full md:w-[65%] shrink-0">
             <TrafficMap />
           </div>
 
-          {/* Right Panel (35%) */}
-          <div className="w-[35%] border-l border-border flex flex-col bg-white">
+          {/* Right Panel */}
+          <div className="flex-1 min-h-0 md:w-[35%] border-t md:border-t-0 md:border-l border-border flex flex-col bg-white">
             {/* Tabs */}
             <div className="flex border-b border-border overflow-x-auto">
               {TABS.map((tab) => {
@@ -214,6 +244,7 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+      <Toaster />
     </div>
   );
 }

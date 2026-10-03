@@ -160,7 +160,9 @@ export default function TwinPage() {
               <p className="text-sm font-bold text-success">{avgWithAction} mph</p>
             </div>
             <div className="text-center">
-              <p className="text-[10px] text-muted">Time Saved</p>
+              <p className="text-[10px] text-muted" title="Illustrative estimate: assumes intervention shortens the incident's impact by 30%">
+                Time Saved (est.)
+              </p>
               <p className="text-sm font-bold text-primary flex items-center gap-1">
                 <Timer className="w-3.5 h-3.5" />
                 {data.time_saved_min?.toFixed(1) ?? "—"} min

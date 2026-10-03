@@ -4,7 +4,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageSquare, Send, Bot, User, Wrench, Loader2, FileText, ChevronDown, ChevronRight, Mic, MicOff, Volume2 } from "lucide-react";
 import { useTrafficStore } from "@/lib/store";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
+import { FallbackBadge } from "@/components/StatusOverlays";
 import { cn, formatTime } from "@/lib/utils";
 import type { ChatMessage } from "@/lib/types";
 
@@ -40,6 +41,7 @@ function RagSourceBadges({ sources }: { sources: string[] }) {
 export default function ChatInterface() {
   const messages = useTrafficStore((s) => s.messages);
   const addMessage = useTrafficStore((s) => s.addMessage);
+  const pushToast = useTrafficStore((s) => s.pushToast);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -105,6 +107,7 @@ export default function ChatInterface() {
       tool_calls: res.tool_calls || [],
       thinking: res.thinking || "",
       rag_sources: res.rag_sources || [],
+      source: res.source,
     };
     addMessage(botMsg);
     if (isVoice) speakText(res.response, res.audio_base64);
@@ -172,10 +175,10 @@ export default function ChatInterface() {
             });
           }
           addBotResponse(res, true);
-        } catch {
+        } catch (e) {
           addMessage({
             role: "assistant",
-            content: "Voice processing failed. Please try again.",
+            content: `Voice processing failed: ${errorMessage(e)}`,
             timestamp: new Date().toISOString(),
             tool_calls: [],
             thinking: "",
@@ -239,9 +242,9 @@ export default function ChatInterface() {
 
     } catch {
       setVoiceStatus("");
-      // Mic permission denied or unavailable
+      pushToast("Microphone unavailable — allow microphone access in your browser to use voice chat.");
     }
-  }, [addMessage, addBotResponse, stopRecording, cleanupRecording]);
+  }, [addMessage, addBotResponse, stopRecording, cleanupRecording, pushToast]);
 
   const handleSend = async () => {
     const trimmed = input.trim();
@@ -261,10 +264,10 @@ export default function ChatInterface() {
     try {
       const res = await api.sendChat(trimmed);
       addBotResponse(res);
-    } catch {
+    } catch (e) {
       addMessage({
         role: "assistant",
-        content: "Connection error. Please try again.",
+        content: `Couldn't send that: ${errorMessage(e)}`,
         timestamp: new Date().toISOString(),
         tool_calls: [],
         thinking: "",
@@ -354,6 +357,8 @@ export default function ChatInterface() {
                   ))}
                 </div>
               )}
+
+              {msg.role === "assistant" && <FallbackBadge source={msg.source} className="mt-2" />}
 
               {/* RAG Source badges */}
               {msg.role === "assistant" && msg.rag_sources && msg.rag_sources.length > 0 && (

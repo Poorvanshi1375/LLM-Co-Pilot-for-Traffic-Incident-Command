@@ -6,9 +6,9 @@ import Map, { Source, Layer, Marker, NavigationControl } from "react-map-gl/mapb
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useTrafficStore } from "@/lib/store";
 import { speedToColor, severityColor } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { Search, MapPin, X, Loader2 } from "lucide-react";
-import type { SegmentSpeed, RiskEntry, GeocodeSuggestion } from "@/lib/types";
+import type { SegmentSpeed, GeocodeSuggestion } from "@/lib/types";
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
 const BROOKLYN_CENTER = { longitude: -73.9442, latitude: 40.6782, zoom: 12.5 };
@@ -33,6 +33,7 @@ export default function TrafficMap() {
   const routeLoading = useTrafficStore((s) => s.routeLoading);
   const setRouteLoading = useTrafficStore((s) => s.setRouteLoading);
   const setRouteWeatherCondition = useTrafficStore((s) => s.setRouteWeatherCondition);
+  const pushToast = useTrafficStore((s) => s.pushToast);
 
   // Search state
   const [originQuery, setOriginQuery] = useState("");
@@ -44,17 +45,20 @@ export default function TrafficMap() {
   const originDebounce = useRef<ReturnType<typeof setTimeout>>(undefined);
   const destDebounce = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Fetch predicted hotspots on mount + 60s refresh
+  // Predicted hotspots are precomputed on the server: fetch once, retry until it succeeds
   useEffect(() => {
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout>;
     const fetchHotspots = async () => {
       try {
         const data = await api.getPredictedHotspots();
-        if (data?.clusters) setPredictedHotspots(data.clusters);
-      } catch { /* silently retry next cycle */ }
+        if (!cancelled && data?.clusters) setPredictedHotspots(data.clusters);
+      } catch {
+        if (!cancelled) retry = setTimeout(fetchHotspots, 15_000);
+      }
     };
     fetchHotspots();
-    const interval = setInterval(fetchHotspots, 60_000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearTimeout(retry); };
   }, [setPredictedHotspots]);
 
   // Auto-compute routes when both points are set, or when incident/traffic changes
@@ -73,15 +77,18 @@ export default function TrafficMap() {
         if (data?.routes) {
           setCandidateRoutes(data.routes);
           setRouteWeatherCondition(data.weather_condition || "clear");
+          if (!data.routes.length) pushToast("No road route found between those points.", "info");
         }
-      } catch { /* ignore */ }
+      } catch (e) {
+        pushToast(`Route planning failed: ${errorMessage(e)}`);
+      }
       setRouteLoading(false);
     };
     computeRoutes();
     // Refresh routes every 30s for real-time congestion updates
     const interval = setInterval(computeRoutes, 30_000);
     return () => clearInterval(interval);
-  }, [routeOrigin, routeDestination, vehicleType, dashboardMode, incidentId, setCandidateRoutes, setRouteLoading, setRouteWeatherCondition]);
+  }, [routeOrigin, routeDestination, vehicleType, dashboardMode, incidentId, setCandidateRoutes, setRouteLoading, setRouteWeatherCondition, pushToast]);
 
   // Geocode search handlers
   const handleOriginSearch = useCallback((q: string) => {
@@ -235,7 +242,7 @@ export default function TrafficMap() {
   // Risk heatmap GeoJSON
   const riskGeoJSON = useMemo(() => ({
     type: "FeatureCollection" as const,
-    features: riskMap.map((r: RiskEntry) => ({
+    features: riskMap.map((r) => ({
       type: "Feature" as const,
       geometry: { type: "Point" as const, coordinates: [r.lon, r.lat] },
       properties: { risk: r.score },
@@ -447,7 +454,7 @@ export default function TrafficMap() {
 
       {/* Search Boxes (route mode) */}
       {isRouteMode && (
-        <div className="absolute top-3 right-3 w-72 space-y-2 z-10">
+        <div className="absolute top-3 right-3 w-[calc(100%-4.5rem)] sm:w-72 space-y-2 z-10">
           {/* Origin Search */}
           <div className="relative">
             <div className="flex items-center bg-white rounded-lg shadow-lg border border-slate-200 px-3 py-2">
@@ -532,7 +539,7 @@ export default function TrafficMap() {
       )}
 
       {/* Map Legend */}
-      <div className="absolute bottom-4 left-4 glass-card rounded-lg p-3 text-xs">
+      <div className="hidden sm:block absolute bottom-4 left-4 glass-card rounded-lg p-3 text-xs">
         <div className="font-semibold mb-1.5 text-slate-700">
           {isRouteMode ? "Route Legend" : "Traffic Conditions"}
         </div>
@@ -540,15 +547,15 @@ export default function TrafficMap() {
           <>
             <div className="flex items-center gap-1.5 mb-1">
               <div className="w-6 h-0.5 bg-emerald-500 rounded" />
-              <span className="text-slate-600">Optimal</span>
+              <span className="text-slate-600">Low risk</span>
             </div>
             <div className="flex items-center gap-1.5 mb-1">
               <div className="w-6 h-0.5 bg-amber-500 rounded" />
-              <span className="text-slate-600">Moderate</span>
+              <span className="text-slate-600">Moderate risk</span>
             </div>
             <div className="flex items-center gap-1.5">
               <div className="w-6 h-0.5 bg-red-500 rounded" />
-              <span className="text-slate-600">High</span>
+              <span className="text-slate-600">High risk</span>
             </div>
           </>
         ) : (

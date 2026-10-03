@@ -3,13 +3,21 @@ import { create } from "zustand";
 import type {
   SegmentSpeed, RiskEntry, IncidentDetection, AgentOutput,
   ChatMessage, TimelineEntry, Metrics, DensityData, WeatherCondition,
-  PredictedHotspot, CandidateRoute, VehicleType, GeocodeSuggestion,
+  PredictedHotspot, CandidateRoute, VehicleType, Settings,
 } from "./types";
+
+export interface Toast {
+  id: number;
+  kind: "error" | "info";
+  message: string;
+}
 
 interface TrafficStore {
   // Connection
   connected: boolean;
   setConnected: (v: boolean) => void;
+  /** Time the current disconnected stretch began (ms), for the wake-up banner */
+  disconnectedSince: number | null;
 
   // Feed data
   segments: SegmentSpeed[];
@@ -79,11 +87,24 @@ interface TrafficStore {
   // Settings
   autoPost: boolean;
   setAutoPost: (v: boolean) => void;
+  settings: Settings | null;
+  setSettings: (s: Settings) => void;
+
+  // Toasts
+  toasts: Toast[];
+  pushToast: (message: string, kind?: Toast["kind"]) => void;
+  dismissToast: (id: number) => void;
 }
+
+let toastId = 0;
 
 export const useTrafficStore = create<TrafficStore>((set) => ({
   connected: false,
-  setConnected: (connected) => set({ connected }),
+  disconnectedSince: Date.now(),
+  setConnected: (connected) => set((s) => ({
+    connected,
+    disconnectedSince: connected ? null : (s.disconnectedSince ?? Date.now()),
+  })),
 
   segments: [],
   riskMap: [],
@@ -147,4 +168,14 @@ export const useTrafficStore = create<TrafficStore>((set) => ({
 
   autoPost: false,
   setAutoPost: (autoPost) => set({ autoPost }),
+  settings: null,
+  setSettings: (settings) => set({ settings, autoPost: settings.auto_post }),
+
+  toasts: [],
+  pushToast: (message, kind = "error") => {
+    const id = ++toastId;
+    set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, message }] }));
+    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })), 6000);
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));

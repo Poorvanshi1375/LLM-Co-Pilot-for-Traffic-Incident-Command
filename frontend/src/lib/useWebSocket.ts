@@ -3,12 +3,15 @@
 
 import { useEffect, useRef, useCallback } from "react";
 import { useTrafficStore } from "./store";
+import type { IncidentDetection } from "./types";
 
 const WS_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
-  .replace("http", "ws") + "/ws/feed";
+  .replace(/^http/, "ws") + "/ws/feed";
 
-const RECONNECT_BASE_MS = 3000;
-const RECONNECT_MAX_MS = 30000;
+// Short cap: a sleeping free-tier backend wakes in about a minute,
+// and we want to connect within seconds of it coming up
+const RECONNECT_BASE_MS = 2000;
+const RECONNECT_MAX_MS = 10000;
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -23,64 +26,82 @@ export function useWebSocket() {
     if (rs === WebSocket.OPEN || rs === WebSocket.CONNECTING) return;
     if (didUnmount.current) return;
 
-    const {
-      setConnected,
-      setFeedData,
-      setIncident,
-      setIncidentStartTime,
-      setProcessing,
-      setAgentOutput,
-      setTimeline,
-      setDensity,
-    } = useTrafficStore.getState();
+    const store = useTrafficStore.getState;
+
+    /** Apply the server's incident, starting the elapsed timer only for a new one. */
+    const syncIncident = (incident: IncidentDetection | null) => {
+      const current = store().incident;
+      if ((current?.incident_id ?? null) === (incident?.incident_id ?? null)) return;
+      store().setIncident(incident);
+      store().setIncidentStartTime(incident ? Date.now() : null);
+      if (!incident) {
+        store().setAgentOutput(null);
+        store().setDensity(null);
+      }
+    };
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
       retryCount.current = 0;
-      setConnected(true);
+      store().setConnected(true);
     };
 
     ws.onmessage = (event) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- server messages are loosely typed JSON
+      let data: any;
       try {
-        const data = JSON.parse(event.data);
-
-        if (data.type === "tick") {
-          setFeedData(
-            data.segments || [],
-            data.risk_map || [],
-            data.hour ?? 8.5
-          );
-        }
-
-        if (data.type === "incident_detected") {
-          setIncident(data.incident);
-          setIncidentStartTime(Date.now());
-          setProcessing(true);
-        }
-
-        if (data.type === "agents_complete") {
-          setAgentOutput(data.output);
-          setProcessing(false);
-          if (data.output?.timeline) setTimeline(data.output.timeline);
-          if (data.output?.density) setDensity(data.output.density);
-        }
-
-        if (data.type === "incident_resolved") {
-          setIncident(null);
-          setAgentOutput(null);
-          setProcessing(false);
-          setIncidentStartTime(null);
-          setDensity(null);
-        }
+        data = JSON.parse(event.data);
       } catch {
-        // skip malformed messages
+        return; // skip malformed messages
+      }
+      const s = store();
+
+      switch (data.type) {
+        case "state": // full snapshot sent on connect
+          syncIncident(data.incident);
+          s.setAgentOutput(data.agent_output);
+          s.setDensity(data.agent_output?.density ?? null);
+          s.setProcessing(Boolean(data.processing));
+          if (data.timeline) s.setTimeline(data.timeline);
+          break;
+
+        case "tick":
+          s.setFeedData(data.segments || [], data.risk_map || [], data.hour ?? 8.5);
+          // Ticks carry incident + processing, so the UI self-corrects if an event was missed
+          syncIncident(data.incident ?? null);
+          if (Boolean(data.processing) !== s.processing) s.setProcessing(Boolean(data.processing));
+          break;
+
+        case "incident_detected":
+          syncIncident(data.incident);
+          s.setProcessing(true);
+          break;
+
+        case "agents_complete":
+          s.setAgentOutput(data.output);
+          s.setProcessing(false);
+          if (data.timeline) s.setTimeline(data.timeline);
+          if (data.output?.density) s.setDensity(data.output.density);
+          break;
+
+        case "agents_failed":
+          s.setProcessing(false);
+          if (data.timeline) s.setTimeline(data.timeline);
+          s.pushToast(`Agent pipeline failed: ${data.error || "unknown error"}`);
+          break;
+
+        case "incident_resolved":
+          syncIncident(null);
+          s.setProcessing(false);
+          if (data.timeline) s.setTimeline(data.timeline);
+          break;
       }
     };
 
     ws.onclose = () => {
-      setConnected(false);
+      store().setConnected(false);
       if (!didUnmount.current) {
         // Exponential backoff capped at RECONNECT_MAX_MS
         const delay = Math.min(

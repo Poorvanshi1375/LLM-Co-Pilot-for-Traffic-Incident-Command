@@ -9,6 +9,7 @@ import { useTrafficStore } from "@/lib/store";
 import { cn, confidenceColor } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type { CandidateRoute } from "@/lib/types";
+import { FallbackBadge } from "@/components/StatusOverlays";
 
 const COLOR_MAP: Record<string, string> = {
   "#10B981": "bg-emerald-500",
@@ -16,8 +17,9 @@ const COLOR_MAP: Record<string, string> = {
   "#EF4444": "bg-red-500",
 };
 
+// Route colour comes from the route's average risk score, not its rank
 const COLOR_LABEL: Record<string, string> = {
-  "#10B981": "Optimal",
+  "#10B981": "Low Risk",
   "#F59E0B": "Moderate Risk",
   "#EF4444": "High Risk",
 };
@@ -190,6 +192,7 @@ export default function RoutingPanel() {
       <div className="flex items-center gap-2 mb-3">
         <Navigation className="w-4 h-4 text-primary" />
         <h3 className="text-sm font-semibold text-foreground">Dynamic Diversion Route</h3>
+        <FallbackBadge source={diversion.source} className="ml-auto" />
       </div>
 
       <div className="border border-border rounded-lg p-4 bg-white">
@@ -221,7 +224,7 @@ export default function RoutingPanel() {
           </div>
           <div className="text-center p-2 bg-blue-50 rounded-lg">
             <Clock className="w-4 h-4 text-primary mx-auto mb-1" />
-            <p className="text-xs text-muted">Time Delta</p>
+            <p className="text-xs text-muted">Extra Time</p>
             <p className="text-sm font-bold text-primary">
               +{diversion.time_delta_min.toFixed(1)} min
             </p>

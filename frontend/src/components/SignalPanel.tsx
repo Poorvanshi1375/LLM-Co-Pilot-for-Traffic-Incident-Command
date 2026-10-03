@@ -4,6 +4,7 @@
 import { TrafficCone, Clock, MapPin, TrendingUp } from "lucide-react";
 import { useTrafficStore } from "@/lib/store";
 import { cn, confidenceColor } from "@/lib/utils";
+import { FallbackBadge } from "@/components/StatusOverlays";
 
 export default function SignalPanel() {
   const agentOutput = useTrafficStore((s) => s.agentOutput);
@@ -26,6 +27,7 @@ export default function SignalPanel() {
         <h3 className="text-sm font-semibold text-foreground">
           Signal Re-Timing ({recs.length} intersections)
         </h3>
+        <FallbackBadge source={recs[0]?.source} className="ml-auto" />
       </div>
 
       {recs.map((rec, i) => (

@@ -4,6 +4,7 @@
 import { Bell, Monitor, Radio, MessageCircle, Copy, Check } from "lucide-react";
 import { useTrafficStore } from "@/lib/store";
 import { useState } from "react";
+import { FallbackBadge } from "@/components/StatusOverlays";
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -42,6 +43,7 @@ export default function AlertPanel() {
       <div className="flex items-center gap-2 mb-2">
         <Bell className="w-4 h-4 text-primary" />
         <h3 className="text-sm font-semibold text-foreground">Public Alert Drafts</h3>
+        <FallbackBadge source={alerts.source} className="ml-auto" />
       </div>
 
       {/* VMS Signs */}
@@ -63,7 +65,7 @@ export default function AlertPanel() {
           ))}
         </div>
         <p className="text-[10px] text-muted mt-1.5">
-          Constraint: ≤20 chars/line, ≤4 lines
+          Constraint: ≤20 chars/line, 3 lines
         </p>
       </div>
 

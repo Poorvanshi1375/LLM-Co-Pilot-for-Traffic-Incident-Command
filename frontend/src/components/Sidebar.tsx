@@ -5,12 +5,12 @@ import { useEffect, useState } from "react";
 import {
   Activity, AlertTriangle, Clock, Radio, Gauge,
   CheckCircle, Circle, CloudRain, Cloud, Sun,
-  Snowflake, Wind, CloudFog, CloudLightning, Share2,
+  Snowflake, Wind, CloudFog, Share2, KeyRound, Radar,
 } from "lucide-react";
 import Image from "next/image";
 import { useTrafficStore } from "@/lib/store";
 import { severityBg, formatHour, cn } from "@/lib/utils";
-import { api } from "@/lib/api";
+import { api, errorMessage, getAdminToken, setAdminToken } from "@/lib/api";
 
 export default function Sidebar() {
   const connected = useTrafficStore((s) => s.connected);
@@ -25,13 +25,52 @@ export default function Sidebar() {
   const setWeather = useTrafficStore((s) => s.setWeather);
   const autoPost = useTrafficStore((s) => s.autoPost);
   const setAutoPost = useTrafficStore((s) => s.setAutoPost);
+  const settings = useTrafficStore((s) => s.settings);
+  const setSettings = useTrafficStore((s) => s.setSettings);
+  const pushToast = useTrafficStore((s) => s.pushToast);
 
   const [elapsed, setElapsed] = useState("00:00");
+  const [tokenInput, setTokenInput] = useState("");
+  const [hasToken, setHasToken] = useState(false);
 
-  // Fetch initial auto-post setting
+  // Fetch server settings once connected (the backend may still be waking up)
   useEffect(() => {
-    api.getSettings().then((s: { auto_post: boolean }) => setAutoPost(s.auto_post)).catch(() => {});
-  }, [setAutoPost]);
+    if (!connected) return;
+    api.getSettings().then(setSettings).catch(() => {});
+  }, [connected, setSettings]);
+
+  // localStorage is only readable after hydration, so this must run in an effect
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHasToken(Boolean(getAdminToken()));
+  }, []);
+
+  const toggleAutoPost = async () => {
+    const next = !autoPost;
+    try {
+      await api.setAutoPost(next);
+      setAutoPost(next);
+    } catch (e) {
+      pushToast(errorMessage(e));
+    }
+  };
+
+  const toggleAutoDetect = async () => {
+    if (!settings) return;
+    const next = !settings.auto_detect;
+    try {
+      await api.setAutoDetect(next);
+      setSettings({ ...settings, auto_detect: next });
+    } catch (e) {
+      pushToast(errorMessage(e));
+    }
+  };
+
+  const saveToken = () => {
+    setAdminToken(tokenInput.trim());
+    setHasToken(Boolean(tokenInput.trim()));
+    setTokenInput("");
+  };
 
   // Poll weather every 5 minutes
   useEffect(() => {
@@ -283,29 +322,108 @@ export default function Sidebar() {
             <Share2 className="w-3.5 h-3.5" />
             <span>Auto-Post Tweets</span>
           </div>
-          <button
-            onClick={() => {
-              const next = !autoPost;
-              setAutoPost(next);
-              api.setAutoPost(next).catch(() => setAutoPost(!next));
-            }}
-            className={cn(
-              "relative w-8 h-[18px] rounded-full transition-colors duration-200",
-              autoPost ? "bg-blue-500" : "bg-slate-300"
-            )}
-          >
-            <span
-              className={cn(
-                "absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform duration-200",
-                autoPost && "translate-x-3.5"
-              )}
-            />
-          </button>
+          <Toggle
+            on={autoPost}
+            disabled={!settings?.twitter_enabled}
+            onClick={toggleAutoPost}
+            label="Auto-post tweets"
+          />
         </div>
         <p className="text-[10px] text-muted mt-1 pl-5.5">
-          {autoPost ? "Tweets post when incidents detected" : "Tweet auto-posting disabled"}
+          {!settings?.twitter_enabled
+            ? "Posting is disabled on this server"
+            : autoPost ? "Tweets post when incidents are processed" : "Tweet auto-posting off (operator only)"}
         </p>
       </div>
+
+      {/* Auto-detect incidents */}
+      <div className="px-4 py-3 border-t border-slate-200">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <Radar className="w-3.5 h-3.5" />
+            <span>Auto-Detect Incidents</span>
+          </div>
+          <Toggle
+            on={Boolean(settings?.auto_detect)}
+            disabled={!settings}
+            onClick={toggleAutoDetect}
+            label="Auto-detect incidents"
+          />
+        </div>
+        <p className="text-[10px] text-muted mt-1 pl-5.5">
+          {settings?.auto_detect
+            ? "Agents run when the feed shows a sustained slowdown"
+            : "Off — use Simulate Incident (operator can enable)"}
+        </p>
+      </div>
+
+      {/* Operator token */}
+      <div className="px-4 py-3 border-t border-slate-200">
+        <div className="flex items-center gap-2 text-xs text-muted mb-1.5">
+          <KeyRound className="w-3.5 h-3.5" />
+          <span>Operator Access</span>
+        </div>
+        {hasToken ? (
+          <div className="flex items-center justify-between pl-5.5 text-[10px]">
+            <span className="text-success">Token saved in this browser</span>
+            <button
+              onClick={() => { setAdminToken(""); setHasToken(false); }}
+              className="text-muted hover:text-foreground underline"
+            >
+              Forget
+            </button>
+          </div>
+        ) : (
+          <form
+            className="flex gap-1.5 pl-5.5"
+            onSubmit={(e) => { e.preventDefault(); saveToken(); }}
+          >
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="Admin token"
+              aria-label="Admin token"
+              className="flex-1 min-w-0 text-[11px] border border-border rounded px-2 py-1 outline-none focus:border-primary"
+            />
+            <button
+              type="submit"
+              disabled={!tokenInput.trim()}
+              className="text-[11px] px-2 py-1 rounded bg-slate-100 text-foreground hover:bg-slate-200 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </form>
+        )}
+      </div>
     </div>
+  );
+}
+
+function Toggle({ on, disabled, onClick, label }: {
+  on: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "relative w-8 h-[18px] rounded-full transition-colors duration-200 disabled:opacity-40 disabled:cursor-not-allowed",
+        on ? "bg-blue-500" : "bg-slate-300"
+      )}
+    >
+      <span
+        className={cn(
+          "absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform duration-200",
+          on && "translate-x-3.5"
+        )}
+      />
+    </button>
   );
 }

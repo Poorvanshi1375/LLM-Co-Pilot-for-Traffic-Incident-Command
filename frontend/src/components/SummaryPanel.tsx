@@ -1,7 +1,8 @@
 /* ── Summary Panel — supervisor's final narrative + RAG context ── */
 "use client";
 
-import { Brain, FileText, BarChart3 } from "lucide-react";
+import { Brain, FileText, BarChart3, AlertTriangle, ShieldCheck } from "lucide-react";
+import { FallbackBadge } from "@/components/StatusOverlays";
 import { useTrafficStore } from "@/lib/store";
 
 export default function SummaryPanel() {
@@ -26,6 +27,7 @@ export default function SummaryPanel() {
           <h3 className="text-sm font-semibold text-foreground">
             Supervisor Summary
           </h3>
+          <FallbackBadge source={agentOutput.agent_status?.supervisor?.source} className="ml-auto" />
         </div>
         <div className="border border-border rounded-lg p-3 bg-purple-50/50">
           <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">
@@ -33,6 +35,38 @@ export default function SummaryPanel() {
           </p>
         </div>
       </div>
+
+      {/* Coherence issues found by the supervisor */}
+      {(agentOutput.coherence_issues?.length ?? 0) > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle className="w-4 h-4 text-warning" />
+            <h3 className="text-sm font-semibold text-foreground">
+              Conflicts Between Agents ({agentOutput.coherence_issues!.length})
+            </h3>
+          </div>
+          <ul className="space-y-1.5">
+            {agentOutput.coherence_issues!.map((issue, i) => (
+              <li key={i} className="border border-amber-200 bg-amber-50 rounded-lg p-2.5 text-xs text-amber-900 leading-relaxed">
+                {issue}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* SOP compliance note */}
+      {agentOutput.sop_compliance && (
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <ShieldCheck className="w-4 h-4 text-success" />
+            <h3 className="text-sm font-semibold text-foreground">SOP Compliance</h3>
+          </div>
+          <p className="border border-border rounded-lg p-2.5 bg-white text-xs text-slate-700 leading-relaxed">
+            {agentOutput.sop_compliance}
+          </p>
+        </div>
+      )}
 
       {/* RAG Context */}
       {agentOutput.rag_context?.length > 0 && (
